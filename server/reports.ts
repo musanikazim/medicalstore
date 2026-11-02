@@ -1,3 +1,4 @@
+import { qty } from "./core";
 import { expiryStatus, expiryThreshold } from "../shared/expiry";
 import { Prisma } from "@prisma/client";
 import { db, D, money, date, today } from "./engine";
@@ -53,8 +54,16 @@ export async function report(
         return {
           ...s,
           lines,
+          tax: new Prisma.Decimal(
+            lines.reduce((v, l) => v.plus(l.tax.toString()), D(0)).toFixed(6),
+          ),
           total: new Prisma.Decimal(
-            lines.reduce((v, l) => v.plus(l.net.toString()), D(0)).toFixed(6),
+            lines
+              .reduce(
+                (v, l) => v.plus(l.net.toString()).plus(l.tax.toString()),
+                D(0),
+              )
+              .toFixed(6),
           ),
           cogs: new Prisma.Decimal(
             lines.reduce((v, l) => v.plus(l.cogs.toString()), D(0)).toFixed(6),
@@ -108,7 +117,9 @@ export async function report(
         rows.reduce((s, x) => s.plus(x[key].toString()), D(0));
       const sr = filteredReturns.filter((r) => r.type === "SALE"),
         pr = filteredReturns.filter((r) => r.type === "PURCHASE");
-      const revenue = sum(sales, "total").minus(sum(sr, "amount")),
+      const revenue = sum(sales, "total")
+          .minus(sum(sales, "tax"))
+          .minus(sum(sr, "amount").minus(sum(sr, "tax"))),
         cogs = sum(sales, "cogs").minus(sum(sr, "cogs"));
       const sellable = batches.filter(
         (b) => b.status === "SELLABLE" && b.expiry >= today(),
@@ -138,7 +149,7 @@ export async function report(
           stock: 0,
         };
         if (b.status === "SELLABLE" && b.expiry >= today())
-          existing.stock += b.quantity;
+          existing.stock = qty(D(existing.stock).plus(b.quantity.toString()));
         med.set(b.medicineId, existing);
       }
       const days = expiryThreshold(settings?.data as any);
@@ -158,7 +169,19 @@ export async function report(
                 }).format(s.createdAt) === d,
             ),
             "total",
-          ).toFixed(2),
+          )
+            .minus(
+              sum(
+                sales.filter(
+                  (s) =>
+                    new Intl.DateTimeFormat("en-CA", {
+                      timeZone: "Asia/Karachi",
+                    }).format(s.createdAt) === d,
+                ),
+                "tax",
+              ),
+            )
+            .toFixed(2),
         };
       });
       const top = new Map<string, any>();
@@ -169,7 +192,11 @@ export async function report(
             quantity: 0,
             revenue: D(0),
           };
-          old.quantity += l.quantity * l.factor;
+          old.quantity = qty(
+            D(old.quantity).plus(
+              D(l.quantity.toString()).mul(l.factor.toString()),
+            ),
+          );
           old.revenue = old.revenue.plus(l.net.toString());
           top.set(l.medicineId, old);
         }
@@ -214,11 +241,17 @@ export async function report(
       };
       for (const sale of sales) {
         const d = dailyRow(dateKey(sale.createdAt));
-        d.sales = d.sales.plus(sale.total.toString());
+        d.sales = d.sales
+          .plus(sale.total.toString())
+          .minus(sale.tax.toString());
         d.cogs = d.cogs.plus(sale.cogs.toString());
         for (const line of sale.lines) {
           const m = medicineRow(line.medicineId, line.name);
-          m.quantity += line.quantity * line.factor;
+          m.quantity = qty(
+            D(m.quantity).plus(
+              D(line.quantity.toString()).mul(line.factor.toString()),
+            ),
+          );
           m.sales = m.sales.plus(line.net.toString());
           m.cogs = m.cogs.plus(line.cogs.toString());
         }
@@ -256,15 +289,15 @@ export async function report(
       for (const r of filteredReturns) {
         const d = dailyRow(dateKey(r.createdAt));
         if (r.type === "SALE") {
-          d.sales = d.sales.minus(r.amount.toString());
+          d.sales = d.sales.minus(r.amount.toString()).plus(r.tax.toString());
           d.cogs = d.cogs.minus(r.cogs.toString());
           const allocation = allocationMap.get(r.originalId)!;
           const m = medicineRow(
             allocation.saleLine.medicineId,
             allocation.saleLine.name,
           );
-          m.returned += r.quantity;
-          m.sales = m.sales.minus(r.amount.toString());
+          m.returned = qty(D(m.returned).plus(r.quantity.toString()));
+          m.sales = m.sales.minus(r.amount.toString()).plus(r.tax.toString());
           m.cogs = m.cogs.minus(r.cogs.toString());
         } else {
           d.purchases = d.purchases.minus(r.amount.toString());
@@ -297,9 +330,9 @@ export async function report(
             value: D(0),
           });
         const row = stockMap.get(b.medicineId);
-        row.stock += b.quantity;
+        row.stock = qty(D(row.stock).plus(b.quantity.toString()));
         if (b.status === "SELLABLE" && b.expiry >= today())
-          row.available += b.quantity;
+          row.available = qty(D(row.available).plus(b.quantity.toString()));
         row.value = row.value.plus(D(b.cost.toString()).mul(b.quantity));
       }
       for (const mv of allMoves) {
@@ -317,9 +350,13 @@ export async function report(
           } as Record<string, string>
         )[mv.type];
         if (field)
-          row[field] +=
-            mv.quantity *
-            (mv.type === "SALE" || mv.type === "PURCHASE_RETURN" ? -1 : 1);
+          row[field] = qty(
+            D(row[field]).plus(
+              D(mv.quantity.toString()).mul(
+                mv.type === "SALE" || mv.type === "PURCHASE_RETURN" ? -1 : 1,
+              ),
+            ),
+          );
       }
       const medicineSales = [...medicineMap.values()].map((m) => ({
         ...m,
@@ -346,6 +383,42 @@ export async function report(
         ...m,
         value: m.value.toFixed(2),
       }));
+      const customers = await t.customer.findMany({
+        include: { accounts: true },
+      });
+      const outstanding = customers.reduce(
+        (s, c) =>
+          s
+            .plus(c.openingOutstanding.toString())
+            .plus(
+              c.accounts.reduce(
+                (n, x) =>
+                  n
+                    .plus(x.original.toString())
+                    .minus(x.settled.toString())
+                    .minus(x.returned.toString()),
+                D(0),
+              ),
+            ),
+        D(0),
+      );
+      const todayStart = new Date(today() + "T00:00:00+05:00"),
+        todayEnd = new Date(today() + "T23:59:59.999+05:00");
+      const todaySales = await t.sale.findMany({
+        where: { createdAt: { gte: todayStart, lte: todayEnd } },
+      });
+      const todayCollections = await t.collection.findMany({
+        where: { createdAt: { gte: todayStart, lte: todayEnd } },
+      });
+      const todayReversals = await t.collectionReversal.findMany({
+        where: { createdAt: { gte: todayStart, lte: todayEnd } },
+        include: { collection: true },
+      });
+      const sellingValue = sellable.reduce(
+        (s, b) =>
+          s.plus(D(b.quantity.toString()).mul(b.medicine.salePrice.toString())),
+        D(0),
+      );
       return {
         from,
         to,
@@ -356,9 +429,9 @@ export async function report(
         lowStock: [...med.values()].filter((m) => m.stock <= m.minimum),
         outOfStock: [...med.values()].filter((m) => m.stock === 0),
         nearExpiry: batches.filter(
-          (b) => b.quantity > 0 && withinWarning(b.expiry),
+          (b) => b.quantity.gt(0) && withinWarning(b.expiry),
         ),
-        expired: batches.filter((b) => b.quantity > 0 && b.expiry < today()),
+        expired: batches.filter((b) => b.quantity.gt(0) && b.expiry < today()),
         adjustments: movements.filter((m) => m.type === "ADJUSTMENT"),
         summary: {
           sales: revenue.toFixed(2),
@@ -366,15 +439,29 @@ export async function report(
           purchases: sum(purchases, "total")
             .minus(sum(pr, "amount"))
             .toFixed(2),
+          inventorySellingValue: sellingValue.toFixed(2),
+          customerOutstanding: outstanding.toFixed(2),
+          todayCreditSales: todaySales
+            .reduce((s, x) => s.plus(x.creditAmount.toString()), D(0))
+            .toFixed(2),
+          todayCustomerCollections: todayCollections
+            .reduce((s, x) => s.plus(x.amount.toString()), D(0))
+            .minus(
+              todayReversals.reduce(
+                (s, x) => s.plus(x.collection.amount.toString()),
+                D(0),
+              ),
+            )
+            .toFixed(2),
           stockValue: inventoryValue.toFixed(2),
           sellableValue: availableValue.toFixed(2),
           invoiceCount: sales.length,
           lowStock: [...med.values()].filter((m) => m.stock <= m.minimum)
             .length,
           nearExpiry: batches.filter(
-            (b) => b.quantity > 0 && withinWarning(b.expiry),
+            (b) => b.quantity.gt(0) && withinWarning(b.expiry),
           ).length,
-          expired: batches.filter((b) => b.quantity > 0 && b.expiry < today())
+          expired: batches.filter((b) => b.quantity.gt(0) && b.expiry < today())
             .length,
         },
         trend,
@@ -385,7 +472,7 @@ export async function report(
         alerts: [...med.values()].filter((m) => m.stock <= m.minimum),
         expiryAlerts: batches.filter(
           (b) =>
-            b.quantity > 0 && (withinWarning(b.expiry) || b.expiry < today()),
+            b.quantity.gt(0) && (withinWarning(b.expiry) || b.expiry < today()),
         ),
         inventory: batches,
         movements,

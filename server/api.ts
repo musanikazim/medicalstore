@@ -1,3 +1,29 @@
+import { creditReport } from "./credit-reports";
+import { invoiceDocument, collectionDocument } from "./printing";
+import {
+  customerList,
+  saveCustomer,
+  customerDetail,
+  bankAccounts,
+  saveBank,
+  collectPayment,
+  reverseCollection,
+  creditNote,
+} from "./finance";
+import {
+  draftList,
+  saveDraft,
+  resumeDraft,
+  discardDraft,
+  CartValidationError,
+} from "./carts";
+import {
+  prepareProduct,
+  listMaster,
+  saveMaster,
+  deleteMaster,
+} from "./catalogue";
+import { qty } from "./core";
 import { expiryStatus, expiryThreshold } from "../shared/expiry";
 import { report } from "./reports";
 import { Router, Request, Response, NextFunction } from "express";
@@ -46,15 +72,34 @@ const safeUser = (u: any) => ({
   name: u.name,
   role: u.role,
 });
+// Keep the existing numeric quantity API while NUMERIC columns retain six-decimal precision.
+const numericFields = new Set([
+  "quantity",
+  "factor",
+  "bonus",
+  "returned",
+  "received",
+]);
+function jsonResult(value: any, key = ""): any {
+  if (value === null || typeof value !== "object" || value instanceof Date)
+    return value;
+  if (typeof value.toNumber === "function")
+    return numericFields.has(key) ? value.toNumber() : value.toString();
+  if (Array.isArray(value)) return value.map((v) => jsonResult(v));
+  return Object.fromEntries(
+    Object.entries(value).map(([k, v]) => [k, jsonResult(v, k)]),
+  );
+}
 const route = (
-  method: "get" | "post" | "put",
+  method: "get" | "post" | "put" | "delete",
   path: string,
   fn: (req: Request, res: Response) => Promise<any>,
 ) =>
   api[method](path, (req, res, next) => {
     Promise.resolve(fn(req, res))
       .then((value) => {
-        if (!res.headersSent && value !== undefined) res.json(value);
+        if (!res.headersSent && value !== undefined)
+          res.json(jsonResult(value));
       })
       .catch(next);
   });
@@ -150,12 +195,105 @@ route("post", "/auth/logout", async (r, res) => {
   res.clearCookie("session", { ...cookieOptions, maxAge: undefined });
   return { ok: true };
 });
+route("get", "/credit-reports", async (r, res) => {
+  const result = await creditReport(actor(r), r.query);
+  if (r.query.format === "pdf") {
+    res.type("pdf");
+    const pdf = new PDFDocument({ margin: 36 });
+    pdf.pipe(res);
+    pdf
+      .fontSize(16)
+      .text("Sehat · " + result.kind)
+      .fontSize(9)
+      .text(result.from + " to " + result.to)
+      .text(result.note)
+      .moveDown();
+    for (const row of result.rows)
+      pdf
+        .text(
+          Object.entries(row)
+            .map(([k, v]) => k + ": " + v)
+            .join(" | "),
+        )
+        .moveDown();
+    pdf.end();
+    return;
+  }
+  return result;
+});
+route("get", "/customers", async (r) =>
+  customerList(actor(r), String(r.query.q || "")),
+);
+route("post", "/customers", async (r) => saveCustomer(actor(r), r.body));
+route("put", "/customers/:id", async (r) =>
+  saveCustomer(actor(r), r.body, String(r.params.id)),
+);
+route("get", "/customers/:id", async (r) =>
+  customerDetail(actor(r), String(r.params.id)),
+);
+route("get", "/bank-accounts", async (r) =>
+  bankAccounts(actor(r), r.query.all === "true"),
+);
+route("post", "/bank-accounts", async (r) => saveBank(actor(r), r.body));
+route("put", "/bank-accounts/:id", async (r) =>
+  saveBank(actor(r), r.body, String(r.params.id)),
+);
+route("post", "/collections", async (r) => collectPayment(actor(r), r.body));
+route("post", "/collections/:id/reverse", async (r) =>
+  reverseCollection(actor(r), String(r.params.id), r.body),
+);
+route("post", "/credit-notes", async (r) => creditNote(actor(r), r.body));
+route("get", "/pos-drafts", async (r) =>
+  draftList(actor(r), r.query.all === "true"),
+);
+route("put", "/pos-drafts/:id", async (r) =>
+  saveDraft(actor(r), { ...r.body, id: String(r.params.id) }),
+);
+route("post", "/pos-drafts/:id/resume", async (r) =>
+  resumeDraft(actor(r), String(r.params.id)),
+);
+route("post", "/pos-drafts/:id/discard", async (r) =>
+  discardDraft(
+    actor(r),
+    String(r.params.id),
+    z.number().int().parse(r.body.version),
+  ),
+);
+route("get", "/medicines/:id/serials", async (r) =>
+  db.stockSerial.findMany({
+    where: {
+      medicineId: String(r.params.id),
+      status: "AVAILABLE",
+      batch: { status: "SELLABLE", expiry: { gte: today() } },
+    },
+    select: { serial: true, batchId: true },
+  }),
+);
+route("get", "/master-data", async (r) =>
+  listMaster(
+    actor(r),
+    r.query.kind ? String(r.query.kind) : undefined,
+    r.query.all === "true",
+  ),
+);
+route("post", "/master-data", async (r) => saveMaster(actor(r), r.body));
+route("put", "/master-data/:id", async (r) =>
+  saveMaster(actor(r), r.body, String(r.params.id)),
+);
+route("delete", "/master-data/:id", async (r) =>
+  deleteMaster(actor(r), String(r.params.id)),
+);
 route("get", "/medicines", async (r) => {
   const q = String(r.query.q || "");
   const a = actor(r);
+  const code = Number(q.replace(/^(MED|PROD)-/i, ""));
   const list = await db.medicine.findMany({
     where: {
       OR: [
+        ...(Number.isSafeInteger(code) && code > 0 ? [{ code }] : []),
+        { brand: { contains: q, mode: "insensitive" } },
+        { specification: { contains: q, mode: "insensitive" } },
+        { model: { contains: q, mode: "insensitive" } },
         { name: { contains: q, mode: "insensitive" } },
         { generic: { contains: q, mode: "insensitive" } },
         { barcode: { contains: q } },
@@ -163,23 +301,37 @@ route("get", "/medicines", async (r) => {
     },
     orderBy: { name: "asc" },
     take: 500,
-    include: { batches: true },
+    include: { batches: true, packaging: { include: { unit: true } } },
   });
   return list.map((m) => {
     const available = m.batches
       .filter((b) => b.status === "SELLABLE" && b.expiry >= today())
-      .reduce((s, b) => s + b.quantity, 0);
-    const stock = m.batches.reduce((s, b) => s + b.quantity, 0);
+      .reduce((s, b) => qty(D(s).plus(b.quantity.toString())), 0);
+    const stock = m.batches.reduce(
+      (s, b) => qty(D(s).plus(b.quantity.toString())),
+      0,
+    );
     const { batches, ...rest } = m;
     const nextExpiry =
       m.batches
         .filter(
           (b) =>
-            b.status === "SELLABLE" && b.expiry >= today() && b.quantity > 0,
+            b.status === "SELLABLE" && b.expiry >= today() && b.quantity.gt(0),
         )
         .map((b) => b.expiry)
         .sort()[0] || null;
-    return { ...safeMedicine(rest, a), available, stock, nextExpiry };
+    return {
+      ...safeMedicine(rest, a),
+      available,
+      stock,
+      nextExpiry,
+      snapshotBatchIds: m.batches
+        .filter(
+          (b) =>
+            b.status === "SELLABLE" && b.expiry >= today() && b.quantity.gt(0),
+        )
+        .map((b) => b.id),
+    };
   });
 });
 route("post", "/medicines", async (r) => saveMedicine(actor(r), r.body));
@@ -192,9 +344,15 @@ route("post", "/medicines/import", async (r) => {
   return transaction(async (t) => {
     const created = [];
     for (const row of rows) {
-      const m = await t.medicine.create({
-        data: { ...row, barcode: row.barcode || null },
+      const prepared = await prepareProduct(t, {
+        ...row,
+        barcode: row.barcode || null,
       });
+      const m = await t.medicine.create({ data: prepared.data });
+      if (prepared.units.length)
+        await t.productUnit.createMany({
+          data: prepared.units.map((u) => ({ ...u, medicineId: m.id })),
+        });
       created.push(m.id);
     }
     await audit(t, actor(r), "MEDICINE_IMPORT", "catalogue", {
@@ -389,9 +547,12 @@ route("get", "/reconciliation", async (r) => {
     .map((b) => ({
       batchId: b.id,
       quantity: b.quantity,
-      ledger: b.movements.reduce((s, m) => s + m.quantity, 0),
+      ledger: b.movements.reduce(
+        (s, m) => qty(D(s).plus(m.quantity.toString())),
+        0,
+      ),
     }))
-    .filter((b) => b.quantity !== b.ledger);
+    .filter((b) => !b.quantity.eq(b.ledger));
 });
 route("get", "/reports", async (r) => {
   requireRole(actor(r), managers);
@@ -439,6 +600,7 @@ route("get", "/reports/export", async (r, res) => {
       Quantity: b.quantity,
       UnitCost: b.cost.toString(),
       Value: D(b.cost.toString()).mul(b.quantity).toFixed(2),
+      MRP: b.mrp?.toString() || "",
     }));
   else if (["movements", "adjustments"].includes(kind))
     rows = result[kind as "movements" | "adjustments"].map((m) => ({
@@ -454,18 +616,25 @@ route("get", "/reports/export", async (r, res) => {
     rows = result.sales
       .map((s) => ({
         Invoice: s.number,
-        Revenue: s.total.toString(),
+        Revenue: D(s.total.toString()).minus(s.tax.toString()).toFixed(2),
         COGS: s.cogs.toString(),
-        GrossProfit: D(s.total.toString()).minus(s.cogs.toString()).toFixed(2),
+        GrossProfit: D(s.total.toString())
+          .minus(s.tax.toString())
+          .minus(s.cogs.toString())
+          .toFixed(2),
       }))
       .concat(
         result.returns
           .filter((x) => x.type === "SALE")
           .map((x) => ({
             Invoice: 0,
-            Revenue: D(x.amount.toString()).neg().toFixed(2),
+            Revenue: D(x.amount.toString())
+              .minus(x.tax.toString())
+              .neg()
+              .toFixed(2),
             COGS: D(x.cogs.toString()).neg().toFixed(2),
             GrossProfit: D(x.amount.toString())
+              .minus(x.tax.toString())
               .minus(x.cogs.toString())
               .neg()
               .toFixed(2),
@@ -545,7 +714,11 @@ route("get", "/reports/export", async (r, res) => {
 route("get", "/sales/:id/receipt", async (r, res) => {
   const sale = await db.sale.findUniqueOrThrow({
     where: { id: String(r.params.id) },
-    include: { lines: true, payments: true },
+    include: {
+      lines: { include: { allocations: { include: { batch: true } } } },
+      payments: true,
+      creditAccount: true,
+    },
   });
   if (actor(r).role === "CASHIER" && sale.createdBy !== actor(r).id)
     throw new Error("FORBIDDEN");
@@ -557,61 +730,56 @@ route("get", "/sales/:id/receipt", async (r, res) => {
     "Content-Disposition",
     `inline; filename="receipt-${sale.number}.pdf"`,
   );
-  const width = settings.receiptWidth === "58" ? 164 : 227;
-  const pdf = new PDFDocument({
-    size: [width, Math.max(400, 250 + sale.lines.length * 50)],
-    margin: 12,
-  });
-  if (settings.logo)
-    pdf
-      .image(
-        Buffer.from(settings.logo.split(",")[1], "base64"),
-        (width - 40) / 2,
-        12,
-        { width: 40, height: 40, fit: [40, 40] },
-      )
-      .moveDown(4);
-  pdf.pipe(res);
-  pdf
-    .fontSize(14)
-    .text(settings.storeName || "MedicalStore", { align: "center" });
-  pdf
-    .fontSize(8)
-    .text(
-      [settings.address, settings.phone, settings.licence]
-        .filter(Boolean)
-        .join("\n"),
-      { align: "center" },
+  const format = z
+    .enum(["58", "80", "A4"])
+    .parse(
+      r.query.format || settings.printFormat || settings.receiptWidth || "80",
     );
+  const pdf = invoiceDocument(sale, settings, format);
+  pdf.pipe(res);
+  pdf.end();
+});
+route("get", "/collections/:id/receipt", async (r, res) => {
+  const c = await db.collection.findUniqueOrThrow({
+    where: { id: String(r.params.id) },
+    include: { customer: true, reversal: true },
+  });
+  const settings =
+    (await db.settings.findUnique({ where: { id: "store" } }))?.data || {};
+  const pdf = collectionDocument(c, c.customer, settings);
+  res
+    .type("pdf")
+    .setHeader(
+      "Content-Disposition",
+      `inline; filename="payment-${c.number}.pdf"`,
+    );
+  pdf.pipe(res);
+  pdf.end();
+});
+route("get", "/customers/:id/statement", async (r, res) => {
+  const d = await customerDetail(actor(r), String(r.params.id));
+  const pdf = new PDFDocument({ margin: 36 });
+  res.type("pdf");
+  pdf.pipe(res);
+  pdf.fontSize(16).text(d.customer.name + " · Customer Statement");
   pdf
-    .moveDown()
-    .text((settings.invoicePrefix || "MS") + "-" + sale.number)
-    .text(sale.createdAt.toLocaleString("en-GB", { timeZone: "Asia/Karachi" }));
-  for (const l of sale.lines)
+    .fontSize(10)
+    .text("Outstanding PKR " + d.outstanding + " · Advance PKR " + d.advance)
+    .moveDown();
+  for (const l of d.ledger)
     pdf
-      .moveDown()
-      .text(l.name)
       .text(
-        `${l.quantity} ${l.unit} × PKR ${money(l.price.toString())} = ${money(l.net.toString())}`,
-      );
-  pdf
-    .moveDown()
-    .fontSize(12)
-    .text("Total PKR " + money(sale.total.toString()));
-  pdf
-    .fontSize(8)
-    .text("Payment: " + sale.payments[0]?.method)
-    .text(
-      "Discount PKR " +
-        money(
-          D(sale.lines.reduce((s, l) => s.plus(l.discount.toString()), D(0))),
-        ),
-    )
-    .moveDown()
-    .text(settings.footer || "Thank you. Please retain your receipt.");
+        `${l.createdAt.toISOString().slice(0, 10)} | ${l.type} | Debit ${l.debit} | Credit ${l.credit} | Balance ${l.balance}`,
+      )
+      .moveDown(0.5);
   pdf.end();
 });
 const settingSchema = z.object({
+  taxRate: z.number().min(0).max(100).default(0),
+  printFormat: z.enum(["58", "80", "A4"]).default("80"),
+  showBatch: z.boolean().default(false),
+  returnPolicy: z.string().max(1000).default(""),
+  storeNotes: z.string().max(1000).default(""),
   allowLooseSales: z.boolean().default(true),
   defaultMinimumStock: z.number().int().nonnegative().max(10000000).default(10),
   cashierDiscountPercent: z.number().min(0).max(100).default(0),
@@ -760,6 +928,10 @@ route("get", "/audit", async (r) => {
 });
 api.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   if (res.headersSent) return;
+  if (err instanceof CartValidationError) {
+    res.status(400).json({ error: err.message, issues: err.issues });
+    return;
+  }
   if (err instanceof z.ZodError) {
     res.status(400).json({
       error: err.issues

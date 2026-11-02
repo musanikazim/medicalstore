@@ -91,3 +91,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\Setup.
 ## Verification limits
 
 The package is checked for excluded credentials and archive integrity. The Docker application/database workflow and automated application tests are verified in the Codex Linux environment. The PowerShell helpers, including the update script, passed syntax checks, and the setup helpers were exercised with PowerShell 7 on Linux against an isolated Docker stack. See `docs/WINDOWS-PACKAGE-VERIFICATION.md` for the checks performed. Windows 11, Docker Desktop/WSL installation, and your physical printer/scanner cannot be exercised on this Linux machine; follow the guide and report the exact error if your computer needs assistance. All existing application modules and business rules remain in the source package. See README.md for application scope and known dependency advisories.
+
+
+## New product, customer and checkout features
+
+After installation or an update, administrators can configure categories, dosage forms, units and product types under Settings → Master Data Management, bank accounts under Settings → Bank accounts, and receipt size under Settings → Invoice & Printing. Customers includes credit approval, statements and payment collection. POS supports split payment and Hold/Resume Draft. Read [the user guide](docs/PRODUCTS-CREDIT-POS.md) before entering opening customer balances or using Khata. Existing installations must follow [the updater](docs/UPDATE-WINDOWS.md); preserve the original `.env` and data volume.

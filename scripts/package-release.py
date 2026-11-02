@@ -9,13 +9,16 @@ import urllib.parse
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-SKIP_DIRS = {'.git', 'node_modules', 'dist', 'backups', 'test-results', 'playwright-report', '__pycache__', '.cache', '.npm', 'coverage', '.vite', 'attachments'}
-SKIP_SUFFIXES = {'.zip', '.dump', '.partial', '.log', '.pyc', '.pem', '.key', '.pfx', '.sqlite', '.db'}
+SKIP_DIRS = {'.git', 'node_modules', 'dist', 'backups', 'test-results', 'playwright-report', '__pycache__', '.cache', '.npm', 'coverage', '.vite', 'attachments', 'secrets', 'credentials'}
+SKIP_SUFFIXES = {'.zip', '.dump', '.partial', '.log', '.pyc', '.pem', '.key', '.pfx', '.sqlite', '.sqlite3', '.db', '.backup', '.bak', '.p12', '.jks'}
 
 def allowed(path):
     relative = path.relative_to(ROOT)
     return (not any(part in SKIP_DIRS for part in relative.parts)
             and not (path.name.startswith('.env') and path.name != '.env.example')
+            and path.name not in {'.npmrc', '.netrc', '.pgpass'}
+            and not path.name.endswith(('.sql.gz', '.sql.bz2'))
+            and (path.suffix.lower() != '.sql' or relative.parts[:2] == ('prisma', 'migrations'))
             and path.suffix.lower() not in SKIP_SUFFIXES)
 
 def secrets():

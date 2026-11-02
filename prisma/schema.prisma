@@ -23,7 +23,21 @@ model Medicine {
  generic String @default("")
  manufacturer String @default("")
  category String @default("")
+ categoryId String?
+ dosageFormId String?
+ productTypeId String?
+ baseUnitId String?
+ brand String @default("")
+ specification String @default("")
+ model String @default("")
+ warranty String @default("")
+ batchTracked Boolean @default(true)
+ expiryTracked Boolean @default(true)
+ serialTracked Boolean @default(false)
+ fractionalAllowed Boolean @default(false)
+ packaging ProductUnit[]
  barcode String? @unique
+ barcodeType String @default("CODE128")
  strength String @default("")
  form String @default("Tablet")
  baseUnit String @default("tablet")
@@ -85,12 +99,15 @@ model PurchaseLine {
  ignoreExpiryWarning Boolean @default(false)
  expiry String
  unit String
- factor Int
- quantity Int
- bonus Int @default(0)
+ factor Decimal @db.Decimal(24,6)
+ quantity Decimal @db.Decimal(24,6)
+ bonus Decimal @default(0) @db.Decimal(24,6)
  unitCost Decimal @db.Decimal(18,6)
  discount Decimal @default(0) @db.Decimal(18,6)
  sellingPrice Decimal @db.Decimal(18,6)
+ mrp Decimal? @db.Decimal(18,6)
+ unitLabel String @default("")
+ serialNumbers Json @default("[]")
  net Decimal @db.Decimal(18,6)
  batches Batch[]
 }
@@ -103,9 +120,11 @@ model Batch {
  number String
  expiry String
  status String @default("SELLABLE")
- quantity Int
- received Int
+ quantity Decimal @db.Decimal(24,6)
+ received Decimal @db.Decimal(24,6)
  cost Decimal @db.Decimal(18,6)
+ mrp Decimal? @db.Decimal(18,6)
+ serials StockSerial[]
  createdAt DateTime @default(now())
  allocations Allocation[]
  movements Movement[]
@@ -120,6 +139,15 @@ model Sale {
  total Decimal @db.Decimal(18,6)
  cogs Decimal @db.Decimal(18,6)
  prescriptionReference String @default("")
+ customerId String?
+ notes String @default("")
+ tax Decimal @default(0) @db.Decimal(18,6)
+ creditAmount Decimal @default(0) @db.Decimal(18,6)
+ dueDate String?
+ cashierName String @default("")
+ customerName String @default("")
+ invoicePrefix String @default("")
+ creditAccount CreditAccount?
  lines SaleLine[]
  payments Payment[]
 }
@@ -130,9 +158,12 @@ model SaleLine {
  medicineId String
  medicine Medicine @relation(fields:[medicineId],references:[id])
  name String
+ unitLabel String @default("")
+ mrp Decimal? @db.Decimal(18,6)
+ tax Decimal @default(0) @db.Decimal(18,6)
  unit String
- factor Int
- quantity Int
+ factor Decimal @db.Decimal(24,6)
+ quantity Decimal @db.Decimal(24,6)
  price Decimal @db.Decimal(18,6)
  discount Decimal @db.Decimal(18,6)
  net Decimal @db.Decimal(18,6)
@@ -145,9 +176,10 @@ model Allocation {
  saleLine SaleLine @relation(fields:[saleLineId],references:[id])
  batchId String
  batch Batch @relation(fields:[batchId],references:[id])
- quantity Int
- returned Int @default(0)
+ quantity Decimal @db.Decimal(24,6)
+ returned Decimal @default(0) @db.Decimal(24,6)
  cost Decimal @db.Decimal(18,6)
+ serialNumbers Json @default("[]")
 }
 model Payment {
  id String @id @default(uuid())
@@ -156,12 +188,19 @@ model Payment {
  method String
  amount Decimal @db.Decimal(18,6)
  tendered Decimal @db.Decimal(18,6)
+ reference String @default("")
+ cardLastFour String @default("")
+ terminal String @default("")
+ bankAccountId String?
+ paymentDate String @default("")
+ remarks String @default("")
+ verification String @default("OPERATOR_RECORDED")
 }
 model Movement {
  id String @id @default(uuid())
  batchId String
  batch Batch @relation(fields:[batchId],references:[id])
- quantity Int
+ quantity Decimal @db.Decimal(24,6)
  type String
  reference String
  effectiveDate String @default("")
@@ -176,10 +215,16 @@ model ReturnRecord {
  reference String
  originalId String
  batchId String
- quantity Int
+ quantity Decimal @db.Decimal(24,6)
  amount Decimal @db.Decimal(18,6)
  cogs Decimal @db.Decimal(18,6)
  disposition String
+ customerId String?
+ receivableReduction Decimal @default(0) @db.Decimal(18,6)
+ refundAmount Decimal @default(0) @db.Decimal(18,6)
+ tax Decimal @default(0) @db.Decimal(18,6)
+ refundMethod String @default("CASH")
+ serialNumbers Json @default("[]")
  reason String
  createdBy String
  createdAt DateTime @default(now())
@@ -210,4 +255,161 @@ model Attachment {
  mime String
  data Bytes
  createdAt DateTime @default(now())
+}
+
+model MasterData {
+ id String @id @default(uuid())
+ kind String
+ name String
+ nameKey String
+ active Boolean @default(true)
+ data Json @default("{}")
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ units ProductUnit[]
+ @@unique([kind,nameKey])
+}
+model ProductUnit {
+ id String @id @default(uuid())
+ medicineId String
+ medicine Medicine @relation(fields:[medicineId],references:[id])
+ unitId String
+ unit MasterData @relation(fields:[unitId],references:[id])
+ factor Decimal @db.Decimal(24,6)
+ salePrice Decimal? @db.Decimal(18,6)
+ fractionalAllowed Boolean @default(false)
+ @@unique([medicineId,unitId])
+}
+model StockSerial {
+ id String @id @default(uuid())
+ medicineId String
+ batchId String
+ batch Batch @relation(fields:[batchId],references:[id])
+ serial String
+ status String @default("AVAILABLE")
+ allocationId String?
+ createdAt DateTime @default(now())
+ @@unique([medicineId,serial])
+ @@index([batchId,status])
+}
+model BankAccount {
+ id String @id @default(uuid())
+ name String
+ bankName String
+ accountTitle String
+ accountNumber String
+ active Boolean @default(true)
+ createdAt DateTime @default(now())
+}
+model Customer {
+ id String @id @default(uuid())
+ code Int @unique @default(autoincrement())
+ name String
+ mobile String @default("")
+ alternateMobile String @default("")
+ address String @default("")
+ typeId String?
+ creditEnabled Boolean @default(false)
+ creditLimit Decimal? @db.Decimal(18,6)
+ creditDays Int @default(30)
+ openingOutstanding Decimal @default(0) @db.Decimal(18,6)
+ advance Decimal @default(0) @db.Decimal(18,6)
+ active Boolean @default(true)
+ notes String @default("")
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ ledger CustomerLedger[]
+ collections Collection[]
+ accounts CreditAccount[]
+ @@index([name])
+ @@index([mobile])
+}
+model CreditAccount {
+ saleId String @id
+ sale Sale @relation(fields:[saleId],references:[id])
+ customerId String
+ customer Customer @relation(fields:[customerId],references:[id])
+ original Decimal @db.Decimal(18,6)
+ settled Decimal @default(0) @db.Decimal(18,6)
+ returned Decimal @default(0) @db.Decimal(18,6)
+ dueDate String
+ settlements Settlement[]
+ @@index([customerId,dueDate])
+}
+model CustomerLedger {
+ id String @id @default(uuid())
+ sequence Int @unique @default(autoincrement())
+ customerId String
+ customer Customer @relation(fields:[customerId],references:[id])
+ type String
+ reference String
+ saleId String?
+ collectionId String?
+ debit Decimal @default(0) @db.Decimal(18,6)
+ credit Decimal @default(0) @db.Decimal(18,6)
+ remarks String @default("")
+ createdBy String
+ createdAt DateTime @default(now())
+ @@index([customerId,sequence])
+}
+model Collection {
+ id String @id @default(uuid())
+ number Int @unique @default(autoincrement())
+ customerId String
+ customer Customer @relation(fields:[customerId],references:[id])
+ amount Decimal @db.Decimal(18,6)
+ advance Decimal @default(0) @db.Decimal(18,6)
+ openingAllocation Decimal @default(0) @db.Decimal(18,6)
+ method String
+ bankAccountId String?
+ reference String @default("")
+ paymentDate String
+ remarks String @default("")
+ cardLastFour String @default("")
+ terminal String @default("")
+ createdBy String
+ createdAt DateTime @default(now())
+ settlements Settlement[]
+ reversal CollectionReversal?
+}
+model Settlement {
+ id String @id @default(uuid())
+ saleId String
+ account CreditAccount @relation(fields:[saleId],references:[saleId])
+ collectionId String?
+ collection Collection? @relation(fields:[collectionId],references:[id])
+ amount Decimal @db.Decimal(18,6)
+ kind String
+ reference String
+ createdBy String
+ createdAt DateTime @default(now())
+}
+model CollectionReversal {
+ id String @id @default(uuid())
+ collectionId String @unique
+ collection Collection @relation(fields:[collectionId],references:[id])
+ reason String
+ createdBy String
+ createdAt DateTime @default(now())
+}
+model CreditNote {
+ id String @id @default(uuid())
+ customerId String
+ amount Decimal @db.Decimal(18,6)
+ reference String
+ reason String
+ createdBy String
+ createdAt DateTime @default(now())
+}
+model PosDraft {
+ id String @id @default(uuid())
+ number Int @unique @default(autoincrement())
+ ownerId String
+ customerId String?
+ status String @default("ACTIVE")
+ version Int @default(1)
+ data Json
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ @@index([ownerId,status])
 }

@@ -48,3 +48,7 @@ PowerShell regression check (no Docker/database commands):
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\windows-config.test.ps1
 ```
+
+## Product/POS/customer credit enhancement verification
+
+See [ENHANCEMENT-VERIFICATION.md](ENHANCEMENT-VERIFICATION.md) for the expanded tests, database preservation checks, isolated Docker/PowerShell updater exercise, supported workflows and remaining physical Windows/printer checks. The original store database is unchanged; install this development version only through the documented backup-first update workflow after review.

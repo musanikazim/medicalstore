@@ -57,13 +57,7 @@ async function policy<T>(days: number, fn: () => Promise<T>) {
     await db.settings.update({ where: { id: "store" }, data: { data } });
   }
 }
-const countStock = async (id: string) =>
-  (
-    await db.batch.aggregate({
-      where: { medicineId: id },
-      _sum: { quantity: true },
-    })
-  )._sum.quantity || 0;
+const countStock=async(id:string)=>Number((await db.batch.aggregate({where:{medicineId:id},_sum:{quantity:true}}))._sum.quantity||0);
 after(() => db.$disconnect());
 test("Karachi calendar boundaries, inclusive warning threshold, zero and month-only expiry", () => {
   assert.equal(businessDate(new Date("2026-11-01T18:59:59Z")), "2026-11-01");

@@ -83,7 +83,7 @@ function sale(m: any, quantity = 15, extra: any = {}) {
   };
 }
 async function balance(m: any) {
-  return (
+  return Number(
     (
       await db.batch.aggregate({
         where: { medicineId: m.id },
@@ -156,11 +156,11 @@ test("FEFO consumes multiple batches and preserves different purchase costs", as
   const early = await stock(m, 10, "2030-01-01", 2);
   const s = await completeSale(a, sale(m, 15));
   assert.equal(
-    (await db.batch.findUniqueOrThrow({ where: { id: early.id } })).quantity,
+    (await db.batch.findUniqueOrThrow({ where: { id: early.id } })).quantity.toNumber(),
     0,
   );
   assert.equal(
-    (await db.batch.findUniqueOrThrow({ where: { id: late.id } })).quantity,
+    (await db.batch.findUniqueOrThrow({ where: { id: late.id } })).quantity.toNumber(),
     15,
   );
   assert.equal(
@@ -309,7 +309,7 @@ test("damaged stock adjustment is audited, retry safe and reconciles ledger", as
   assert.equal(await balance(m), 95);
   const movements = await db.movement.findMany({ where: { batchId: b.id } });
   assert.equal(
-    movements.reduce((s, m) => s + m.quantity, 0),
+    movements.reduce((s, m) => s + Number(m.quantity), 0),
     95,
   );
   await assert.rejects(
@@ -411,8 +411,8 @@ test("all batch balances reconcile; history cannot be edited", async () => {
   assert.ok(batches.length > 0);
   for (const b of batches)
     assert.equal(
-      b.quantity,
-      b.movements.reduce((s, m) => s + m.quantity, 0),
+      Number(b.quantity),
+      b.movements.reduce((s, m) => s + Number(m.quantity), 0),
     );
   const m = await db.movement.findFirstOrThrow();
   await assert.rejects(

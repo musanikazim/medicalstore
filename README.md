@@ -68,3 +68,13 @@ The dependency audit has no high/critical findings after overrides; ExcelJS's le
 ## Branding and expiry update
 
 The existing store name/logo drive sidebar, sign-in branding, tab title and receipts. Expiry Warning Days is a non-negative integer (zero is valid). Karachi calendar-day checks warn at the inclusive threshold, require per-batch acknowledgement before purchase/opening posting, and block normal stock entry for today/past dates. Overrides are audited; inventory badges update at midnight without changing balances. Purchase drafts remain saveable until issues are resolved. Default minimum stock and cashier discount limit fields are hidden; their stored values and backend controls remain intact.
+
+## Product, POS and customer credit enhancements
+
+The development branch adds database-managed categories, dosage forms, product types, units and customer types under **Settings → Master Data Management**. Product Master supports optional barcodes, consumables/devices, product-specific packaging, fractional stock where configured, and serial identity. Existing tablet/strip/box products and historical conversion/cost snapshots remain supported. Selling above MRP shows a warning and records an audit event; it does not imply legal approval.
+
+POS automatically saves per-cashier drafts to PostgreSQL and keeps a recovery copy in the signed-in browser. Resume a draft after navigation or refresh; hold multiple sales without reserving stock. Resuming and posting recheck current prices, available stock, expiry restrictions, prescription requirements and serials. Split checkout supports cash, card, operator-recorded bank transfers, customer credit and customer advances. Card details are limited to the last four digits and references.
+
+**Customers** provides credit approval, limits, statements, invoice settlement, payment receipts, explicit advances, authorized credit notes and administrator payment reversals. **Reports** includes customer outstanding, statements, credit sales, collections, overdue balances, customer sales, aging and payment reconciliation. Sales revenue excludes tax; collections reduce debt without recording another sale. Configure 58 mm, 80 mm or A4 invoice PDFs under **Settings → Invoice & Printing**.
+
+Read [the enhancement guide](docs/PRODUCTS-CREDIT-POS.md) for workflow, migration and accounting details. Existing Windows stores should use [the update procedure](docs/UPDATE-WINDOWS.md), which backs up first and preserves the existing `.env` and Docker data volume. Do not run first-time Setup to update an existing installation.

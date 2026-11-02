@@ -62,3 +62,21 @@ All stock mutations use serializable transactions plus a shared PostgreSQL trans
 Purchase lines accept `ignoreExpiryWarning` (default false). Posting checks the current policy again for each batch. A draft may be saved without acknowledgement, but cannot be posted while a warning remains unacknowledged. `POST /purchases/:id/post` can supply `expiryOverrides: [{lineId, medicineId, batchNumber, expiry}]` for independent confirmation of exact saved line identities. Expiry today/past is blocked for normal purchase posting regardless of acknowledgement.
 
 Opening entries/import rows accept `ignoreExpiryWarning` and an optional existing batch `status` (default SELLABLE). Quarantined/restricted opening entries may retain past expiry dates, remain unavailable for POS, and cannot be released to sellable status without passing the same expiry policy. `PUT /batches/:id/status` accepts `ignoreExpiryWarning` for eligible near-expiry releases. Overrides create `EXPIRY_WARNING_OVERRIDE` audit records with medicine name/ID, batch, expiry, remaining days, warning threshold, Karachi date, source transaction, user and timestamp. Successful idempotent retries do not duplicate stock or audit entries.
+
+
+## Product / credit / draft extension
+
+All endpoints use the existing signed-in session and mutation request guard.
+
+- `GET /master-data?kind=&all=true`, `POST /master-data`, `PUT/DELETE /master-data/:id`: searchable/configurable master data; administrator writes, safe delete.
+- Product payloads add normalized master IDs, tracking flags, barcodeType, specifications and `packaging: [{unitId,factor,salePrice,fractionalAllowed}]`. Purchase/sale/opening unit accepts legacy base/strip/box or a configured UOM ID. `GET /medicines/:id/serials` lists currently available identities.
+- `GET/POST /customers`, `GET/PUT /customers/:id`: customer master, balances, ledger, invoices, payment and purchase history. Cashier creates basic non-credit customers only.
+- `GET/POST /bank-accounts`, `PUT /bank-accounts/:id`: bank selection; managers write.
+- `POST /collections`, `POST /collections/:id/reverse`, `POST /credit-notes`: idempotent financial posting; reversal requires administrator; notes require manager/administrator.
+- `GET /collections/:id/receipt`, `GET /customers/:id/statement`: PDF documents.
+- `GET /credit-reports?kind=&from=&to=&customerId=&format=pdf`: manager reports; omit format for structured rows.
+- `GET /pos-drafts`, `PUT /pos-drafts/:id`, `POST /pos-drafts/:id/resume`, `POST /pos-drafts/:id/discard`: owner-scoped draft CRUD with required revision/version. Manager read-only all=true listing is supported.
+- `POST /sales` adds customerId, notes, split `payments`, optional draftId/draftVersion, expectedPrice and serialNumbers per line. Price changes return structured `issues` by row index; update expectedPrice to the acknowledged current price before retrying.
+- `GET /sales/:id/receipt?format=58|80|A4`: configured PDF format using the original invoice number.
+
+Payments record CASH/CARD/TRANSFER/CREDIT/ADVANCE (legacy RAAST/OTHER remain supported). Monetary values accept at most two decimals at checkout. Card fields accept last four digits only; no PAN/CVV fields are accepted. Transfer allocation needs bankAccountId and reference; verification remains OPERATOR_RECORDED.

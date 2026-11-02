@@ -50,7 +50,7 @@ For a second attempt, reuse the already-extracted files and run `F:\Sehat-Medica
 
 ## Migration and data safety
 
-The only schema addition is `PurchaseLine.ignoreExpiryWarning`, defaulting to false. The new migration is `20261102000000_expiry_acknowledgement`. Previously applied migrations are byte-for-byte unchanged. No rows, balances, prices, users, settings or volumes are deleted or reset. Existing posted purchases stay posted; old drafts must meet the new posting checks.
+This release also includes product types, master data, configurable units, serial tracking, POS drafts, split payments, customer credit, tax snapshots and print settings. It adds `20261102010000_products_credit_pos`, `20261102020000_barcode_tax` and `20261102030000_configurable_unit_defaults` after the expiry acknowledgement migration. Quantities move to six-decimal NUMERIC columns without changing their values. Existing product text/unit fields and posted snapshots are preserved. No business rows or volumes are reset. See [PRODUCTS-CREDIT-POS.md](PRODUCTS-CREDIT-POS.md) for the new workflows and accounting conventions.
 
 Keep the `.dump` created in `F:\Sehat-MedicalStore\backups` and a separate private copy of `.env`. Never share `.env`, backups or rendered Docker configuration publicly. Do not use `docker compose down --volumes`, Docker factory reset, `/MIR`, `/PURGE` or volume deletion as part of this update.
 
