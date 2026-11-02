@@ -1,0 +1,213 @@
+generator client {
+ provider = "prisma-client-js"
+ engineType = "client"
+}
+datasource db {
+ provider = "postgresql"
+ url = env("DATABASE_URL")
+}
+model User {
+ id String @id @default(uuid())
+ email String @unique
+ name String
+ password String
+ role String @default("CASHIER")
+ active Boolean @default(true)
+ sessionVersion Int @default(0)
+ createdAt DateTime @default(now())
+}
+model Medicine {
+ id String @id @default(uuid())
+ code Int @unique @default(autoincrement())
+ name String
+ generic String @default("")
+ manufacturer String @default("")
+ category String @default("")
+ barcode String? @unique
+ strength String @default("")
+ form String @default("Tablet")
+ baseUnit String @default("tablet")
+ purchaseUnit String @default("box")
+ sellingUnit String @default("base")
+ unitsPerStrip Int @default(10)
+ stripsPerBox Int @default(10)
+ looseAllowed Boolean @default(true)
+ prescription Boolean @default(false)
+ purchasePrice Decimal @default(0) @db.Decimal(18,6)
+ salePrice Decimal @default(0) @db.Decimal(18,6)
+ stripPrice Decimal? @db.Decimal(18,6)
+ boxPrice Decimal? @db.Decimal(18,6)
+ mrp Decimal? @db.Decimal(18,6)
+ minimumStock Int @default(10)
+ reorderQuantity Int @default(100)
+ active Boolean @default(true)
+ createdAt DateTime @default(now())
+ updatedAt DateTime @updatedAt
+ batches Batch[]
+ purchaseLines PurchaseLine[]
+ saleLines SaleLine[]
+ @@unique([name,strength,manufacturer,form])
+ @@index([name])
+}
+model Supplier {
+ id String @id @default(uuid())
+ name String @unique
+ phone String @default("")
+ address String @default("")
+ purchases Purchase[]
+}
+model Purchase {
+ id String @id @default(uuid())
+ number Int @unique @default(autoincrement())
+ supplierId String
+ supplier Supplier @relation(fields:[supplierId],references:[id])
+ supplierInvoice String
+ invoiceDate String
+ receivingDate String
+ remarks String @default("")
+ status String @default("DRAFT")
+ charges Decimal @default(0) @db.Decimal(18,6)
+ discount Decimal @default(0) @db.Decimal(18,6)
+ total Decimal @default(0) @db.Decimal(18,6)
+ createdBy String
+ createdAt DateTime @default(now())
+ postedAt DateTime?
+ lines PurchaseLine[]
+ @@unique([supplierId,supplierInvoice])
+}
+model PurchaseLine {
+ id String @id @default(uuid())
+ purchaseId String
+ purchase Purchase @relation(fields:[purchaseId],references:[id])
+ medicineId String
+ medicine Medicine @relation(fields:[medicineId],references:[id])
+ batchNumber String
+ ignoreExpiryWarning Boolean @default(false)
+ expiry String
+ unit String
+ factor Int
+ quantity Int
+ bonus Int @default(0)
+ unitCost Decimal @db.Decimal(18,6)
+ discount Decimal @default(0) @db.Decimal(18,6)
+ sellingPrice Decimal @db.Decimal(18,6)
+ net Decimal @db.Decimal(18,6)
+ batches Batch[]
+}
+model Batch {
+ id String @id @default(uuid())
+ medicineId String
+ medicine Medicine @relation(fields:[medicineId],references:[id])
+ purchaseLineId String?
+ purchaseLine PurchaseLine? @relation(fields:[purchaseLineId],references:[id])
+ number String
+ expiry String
+ status String @default("SELLABLE")
+ quantity Int
+ received Int
+ cost Decimal @db.Decimal(18,6)
+ createdAt DateTime @default(now())
+ allocations Allocation[]
+ movements Movement[]
+ @@index([medicineId,status,expiry])
+}
+model Sale {
+ id String @id @default(uuid())
+ number Int @unique @default(autoincrement())
+ createdBy String
+ createdAt DateTime @default(now())
+ discount Decimal @default(0) @db.Decimal(18,6)
+ total Decimal @db.Decimal(18,6)
+ cogs Decimal @db.Decimal(18,6)
+ prescriptionReference String @default("")
+ lines SaleLine[]
+ payments Payment[]
+}
+model SaleLine {
+ id String @id @default(uuid())
+ saleId String
+ sale Sale @relation(fields:[saleId],references:[id])
+ medicineId String
+ medicine Medicine @relation(fields:[medicineId],references:[id])
+ name String
+ unit String
+ factor Int
+ quantity Int
+ price Decimal @db.Decimal(18,6)
+ discount Decimal @db.Decimal(18,6)
+ net Decimal @db.Decimal(18,6)
+ cogs Decimal @db.Decimal(18,6)
+ allocations Allocation[]
+}
+model Allocation {
+ id String @id @default(uuid())
+ saleLineId String
+ saleLine SaleLine @relation(fields:[saleLineId],references:[id])
+ batchId String
+ batch Batch @relation(fields:[batchId],references:[id])
+ quantity Int
+ returned Int @default(0)
+ cost Decimal @db.Decimal(18,6)
+}
+model Payment {
+ id String @id @default(uuid())
+ saleId String
+ sale Sale @relation(fields:[saleId],references:[id])
+ method String
+ amount Decimal @db.Decimal(18,6)
+ tendered Decimal @db.Decimal(18,6)
+}
+model Movement {
+ id String @id @default(uuid())
+ batchId String
+ batch Batch @relation(fields:[batchId],references:[id])
+ quantity Int
+ type String
+ reference String
+ effectiveDate String @default("")
+ reason String @default("")
+ createdBy String
+ createdAt DateTime @default(now())
+ @@index([batchId,createdAt])
+}
+model ReturnRecord {
+ id String @id @default(uuid())
+ type String
+ reference String
+ originalId String
+ batchId String
+ quantity Int
+ amount Decimal @db.Decimal(18,6)
+ cogs Decimal @db.Decimal(18,6)
+ disposition String
+ reason String
+ createdBy String
+ createdAt DateTime @default(now())
+ @@index([type,originalId])
+}
+model Audit {
+ id String @id @default(uuid())
+ userId String
+ action String
+ entity String
+ details Json
+ createdAt DateTime @default(now())
+}
+model Operation {
+ key String @id
+ hash String
+ result Json
+ createdAt DateTime @default(now())
+}
+model Settings {
+ id String @id @default("store")
+ data Json
+}
+model Attachment {
+ id String @id @default(uuid())
+ purchaseId String @unique
+ filename String
+ mime String
+ data Bytes
+ createdAt DateTime @default(now())
+}

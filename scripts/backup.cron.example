@@ -1,0 +1,3 @@
+# Install for the application's OS user. Cron uses host timezone; this is
+# 21:00 UTC = 02:00 Asia/Karachi. Set CRON_TZ=UTC if supported by your cron.
+0 21 * * * cd /opt/medicalstore && /bin/bash scripts/backup.sh >> /var/log/medicalstore-backup.log 2>&1

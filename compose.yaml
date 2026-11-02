@@ -1,0 +1,65 @@
+name: sehat-medicalstore
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: medicalstore
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run Setup-Windows.cmd first}
+      POSTGRES_DB: medicalstore
+    volumes:
+      - medicalstore-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medicalstore -d medicalstore"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+  app:
+    image: sehat-medicalstore:local
+    build:
+      context: .
+    environment:
+      DATABASE_URL: postgresql://medicalstore:${POSTGRES_PASSWORD:?Run Setup-Windows.cmd first}@db:5432/medicalstore?schema=public
+      JWT_SECRET: ${JWT_SECRET:?Run Setup-Windows.cmd first}
+      # Local HTTP needs a non-Secure session cookie. Binding is loopback only.
+      NODE_ENV: development
+      PORT: "3001"
+      ENABLE_BACKUPS: "false"
+    command: ["sh", "scripts/docker/start.sh"]
+    ports:
+      - "127.0.0.1:${APP_PORT:-3001}:3001"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      start_period: 30s
+      retries: 30
+    restart: unless-stopped
+  backup:
+    image: postgres:16-alpine
+    user: "1000:1000"
+    environment:
+      PGHOST: db
+      PGUSER: medicalstore
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Run Setup-Windows.cmd first}
+      PGDATABASE: medicalstore
+      TZ: Asia/Karachi
+    entrypoint: ["/bin/sh", "/opt/sehat/backup-loop.sh"]
+    volumes:
+      - ./scripts/docker/backup-loop.sh:/opt/sehat/backup-loop.sh:ro
+      - ./backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  medicalstore-data:

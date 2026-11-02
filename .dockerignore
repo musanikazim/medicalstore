@@ -1,0 +1,14 @@
+node_modules
+.git
+.env
+backups
+test-results
+attachments
+dist
+.env.*
+!.env.example
+*.zip
+*.dump
+*.partial
+playwright-report
+__pycache__
