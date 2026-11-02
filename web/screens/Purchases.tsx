@@ -1,3 +1,4 @@
+import { unitsFor, unitFactor } from "../product-utils";
 import { ExpiryField, ExpiryWarning, entryBlocked } from "../components/expiry";
 import React, { useState, useEffect, useRef } from "react";
 import Decimal from "decimal.js";
@@ -337,15 +338,11 @@ export default function Purchases(c: any) {
                                   ignoreExpiryWarning: false,
                                   unit: m?.purchaseUnit || "box",
                                   unitCost: new Decimal(m?.purchasePrice || 0)
-                                    .mul(
-                                      m?.purchaseUnit === "box"
-                                        ? m.unitsPerStrip * m.stripsPerBox
-                                        : m?.purchaseUnit === "strip"
-                                          ? m.unitsPerStrip
-                                          : 1,
-                                    )
+                                    .mul(m ? unitFactor(m, m.purchaseUnit) : 1)
                                     .toString(),
                                   sellingPrice: m?.salePrice || 0,
+                                  mrp: m?.mrp ?? null,
+                                  serialNumbers: [],
                                 }
                               : line,
                           ),
@@ -368,25 +365,38 @@ export default function Purchases(c: any) {
                           type={type}
                           value={l[k]}
                           set={(v: any) => setLine(i, k, v)}
-                          required
+                          required={
+                            c.medicines.find((m: Row) => m.id === l.medicineId)
+                              ?.batchTracked !== false
+                          }
                         />
                       ),
                     )}
-                    <ExpiryField
-                      value={l.expiry}
-                      set={(v: string) => setLine(i, "expiry", v)}
-                      settings={c.settings}
-                      date={c.businessDate || day()}
-                      checked={l.ignoreExpiryWarning}
-                      onCheck={(v: boolean) =>
-                        setLine(i, "ignoreExpiryWarning", v)
-                      }
-                    />
+                    {c.medicines.find((m: Row) => m.id === l.medicineId)
+                      ?.expiryTracked !== false && (
+                      <ExpiryField
+                        value={l.expiry}
+                        set={(v: string) => setLine(i, "expiry", v)}
+                        settings={c.settings}
+                        date={c.businessDate || day()}
+                        checked={l.ignoreExpiryWarning}
+                        onCheck={(v: boolean) =>
+                          setLine(i, "ignoreExpiryWarning", v)
+                        }
+                      />
+                    )}
                     <Field
                       label="Unit"
                       value={l.unit}
                       set={(v: any) => setLine(i, "unit", v)}
-                      options={["base", "strip", "box"]}
+                      options={unitsFor(
+                        c.medicines.find((m: Row) => m.id === l.medicineId) || {
+                          baseUnit: "unit",
+                          looseAllowed: true,
+                          unitsPerStrip: 1,
+                          stripsPerBox: 1,
+                        },
+                      )}
                     />
                     {[
                       ["quantity", "Paid quantity"],
@@ -394,6 +404,7 @@ export default function Purchases(c: any) {
                       ["unitCost", "Cost per selected unit"],
                       ["discount", "Line discount PKR"],
                       ["sellingPrice", "Sale price / base unit"],
+                      ["mrp", "MRP / base unit (optional)"],
                     ].map(([k, label]) => (
                       <Field
                         key={k}
@@ -401,10 +412,36 @@ export default function Purchases(c: any) {
                         type="number"
                         min="0"
                         value={l[k]}
-                        set={(v: any) => setLine(i, k, v)}
-                        required
+                        set={(v: any) =>
+                          setLine(i, k, k === "mrp" && v === "" ? null : v)
+                        }
+                        required={k !== "mrp"}
                       />
                     ))}
+                    <Field
+                      label="Serial numbers (comma separated, one per base unit including bonus)"
+                      value={(l.serialNumbers || []).join(", ")}
+                      set={(v: string) =>
+                        setLine(
+                          i,
+                          "serialNumbers",
+                          v
+                            .split(",")
+                            .map((x) => x.trim())
+                            .filter(Boolean),
+                        )
+                      }
+                    />
+                    {l.mrp && Number(l.sellingPrice) > Number(l.mrp) ? (
+                      <p className="notice">
+                        {
+                          c.medicines.find((m: Row) => m.id === l.medicineId)
+                            ?.name
+                        }
+                        : Selling price {pk(l.sellingPrice)} exceeds MRP{" "}
+                        {pk(l.mrp)}. Review applicable price rules.
+                      </p>
+                    ) : null}
                   </div>
                 </div>
               ))}
@@ -516,7 +553,8 @@ export default function Purchases(c: any) {
                 },
                 {
                   label: "Received",
-                  render: (r) => `${r.quantity} + ${r.bonus} ${r.unit}`,
+                  render: (r) =>
+                    `${r.quantity} + ${r.bonus} ${r.unitLabel || r.unit}`,
                 },
                 { label: "Unit cost", render: (r) => pk(r.unitCost) },
                 { label: "Net", render: (r) => pk(r.net) },

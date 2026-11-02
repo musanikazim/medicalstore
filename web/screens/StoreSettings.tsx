@@ -1,3 +1,4 @@
+import MasterData from "../components/master-data";
 import React, { useState, useEffect, useRef } from "react";
 import Decimal from "decimal.js";
 import {
@@ -79,7 +80,14 @@ export default function StoreSettings(c: any) {
   return (
     <>
       <div className="tab-bar">
-        {["Store profile", "Users & access", "Audit log"].map((t) => (
+        {[
+          "Store profile",
+          "Master Data Management",
+          "Invoice & Printing",
+          "Bank accounts",
+          "Users & access",
+          "Audit log",
+        ].map((t) => (
           <button
             key={t}
             className={tab === t ? "active" : ""}
@@ -89,7 +97,11 @@ export default function StoreSettings(c: any) {
           </button>
         ))}
       </div>
-      {tab === "Store profile" ? (
+      {tab === "Master Data Management" ? (
+        <MasterData {...c} />
+      ) : tab === "Bank accounts" ? (
+        <Banks {...c} />
+      ) : tab === "Store profile" || tab === "Invoice & Printing" ? (
         <section className="card settings-card">
           <div className="card-title">
             <div>
@@ -141,6 +153,45 @@ export default function StoreSettings(c: any) {
                 </button>
               </div>
             )}
+            <h3>Invoice & Printing</h3>
+            <div className="form-grid">
+              <Field
+                label="Default print format"
+                value={form.printFormat || form.receiptWidth || "80"}
+                options={[
+                  { value: "58", label: "58mm Thermal" },
+                  { value: "80", label: "80mm Thermal" },
+                  { value: "A4", label: "A4 Invoice" },
+                ]}
+                set={(v: string) => setForm({ ...form, printFormat: v })}
+              />
+              <Field
+                label="Tax percent"
+                type="number"
+                value={form.taxRate || 0}
+                set={(v: number) => setForm({ ...form, taxRate: v })}
+              />
+              <Field
+                label="Return policy"
+                value={form.returnPolicy || ""}
+                set={(v: string) => setForm({ ...form, returnPolicy: v })}
+              />
+              <Field
+                label="Store notes"
+                value={form.storeNotes || ""}
+                set={(v: string) => setForm({ ...form, storeNotes: v })}
+              />
+              <label>
+                <input
+                  type="checkbox"
+                  checked={!!form.showBatch}
+                  onChange={(e) =>
+                    setForm({ ...form, showBatch: e.target.checked })
+                  }
+                />
+                Print batch allocations
+              </label>
+            </div>
             <div className="form-grid">
               {[
                 ["storeName", "Store name"],
@@ -340,5 +391,71 @@ export default function StoreSettings(c: any) {
         </Modal>
       )}
     </>
+  );
+}
+
+function Banks(c: any) {
+  const rows = useData("/bank-accounts?all=true", c.version, c.setError) || [];
+  const [edit, set] = useState<Row | null>(null);
+  return (
+    <section className="card settings-card">
+      <h2>Bank accounts</h2>
+      <Button
+        onClick={() =>
+          set({
+            name: "",
+            bankName: "",
+            accountTitle: "",
+            accountNumber: "",
+            active: true,
+          })
+        }
+      >
+        Add bank account
+      </Button>
+      <Table
+        rows={rows}
+        onRow={set}
+        columns={["name", "bankName", "accountTitle", "accountNumber"].map(
+          (k) => ({ label: k, render: (r) => r[k] }),
+        )}
+      />
+      {edit && (
+        <Modal title="Bank account" close={() => set(null)}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              c.run(() =>
+                api(
+                  "/bank-accounts" + (edit.id ? "/" + edit.id : ""),
+                  edit,
+                  edit.id ? "PUT" : "POST",
+                ),
+              )
+                .then(() => set(null))
+                .catch(() => {});
+            }}
+          >
+            {["name", "bankName", "accountTitle", "accountNumber"].map((k) => (
+              <Field
+                key={k}
+                label={k}
+                value={edit[k]}
+                set={(v: string) => set({ ...edit, [k]: v })}
+              />
+            ))}
+            <label>
+              <input
+                type="checkbox"
+                checked={edit.active}
+                onChange={(e) => set({ ...edit, active: e.target.checked })}
+              />
+              Active
+            </label>
+            <Button>Save</Button>
+          </form>
+        </Modal>
+      )}
+    </section>
   );
 }

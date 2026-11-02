@@ -1,3 +1,4 @@
+import CreditReports from "./CreditReports";
 import React, { useState, useEffect, useRef } from "react";
 import Decimal from "decimal.js";
 import {
@@ -180,6 +181,7 @@ export default function Reports(c: any) {
 
   return (
     <>
+      <CreditReports {...c} />
       <section className="card report-filters">
         <Field label="From date" type="date" value={from} set={setFrom} />
         <Field label="To date" type="date" value={to} set={setTo} />
@@ -234,8 +236,12 @@ export default function Reports(c: any) {
           <strong>{pk(data.summary.purchases)}</strong>
         </div>
         <div>
-          <small>Current stock at batch cost</small>
+          <small>Current Inventory Value (Purchase Cost)</small>
           <strong>{pk(data.summary.stockValue)}</strong>
+        </div>
+        <div>
+          <small>Current Inventory Value (Selling Price)</small>
+          <strong>{pk(data.summary.inventorySellingValue)}</strong>
         </div>
       </div>
       <section className="card">

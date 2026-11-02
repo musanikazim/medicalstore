@@ -1,3 +1,4 @@
+import { unitsFor } from "../product-utils";
 import {
   ExpiryBadge,
   ExpiryField,
@@ -219,7 +220,9 @@ export default function Inventory(c: any) {
                 render: (r) => (
                   <>
                     <span className={r.expiry < day() ? "danger" : ""}>
-                      {fmt(r.expiry)}
+                      {r.medicine.expiryTracked === false
+                        ? "Not applicable"
+                        : fmt(r.expiry)}
                     </span>
                     <div className="expiry-badge">
                       <ExpiryBadge
@@ -252,6 +255,7 @@ export default function Inventory(c: any) {
                 ),
               },
               { label: "Cost / unit", render: (r) => pk(r.cost) },
+              { label: "MRP / base", render: (r) => (r.mrp ? pk(r.mrp) : "—") },
               {
                 label: "Stock value",
                 render: (r) => pk(Number(r.cost) * r.quantity),
@@ -476,26 +480,46 @@ export default function Inventory(c: any) {
                       : {}),
                   })
                 }
-                required
+                required={
+                  k !== "batchNumber" ||
+                  c.medicines.find((m: Row) => m.id === open.medicineId)
+                    ?.batchTracked !== false
+                }
               />
             ))}
-            <ExpiryField
-              label="Expiry"
-              value={open.expiry}
+            {c.medicines.find((m: Row) => m.id === open.medicineId)
+              ?.expiryTracked !== false && (
+              <ExpiryField
+                label="Expiry"
+                value={open.expiry}
+                set={(v: string) =>
+                  setOpen((p) => ({
+                    ...p,
+                    expiry: v,
+                    ignoreExpiryWarning: false,
+                  }))
+                }
+                settings={c.settings}
+                date={c.businessDate || day()}
+                checked={open.ignoreExpiryWarning}
+                onCheck={(v: boolean) =>
+                  setOpen((p) => ({ ...p, ignoreExpiryWarning: v }))
+                }
+                status={open.status || "SELLABLE"}
+              />
+            )}
+            <Field
+              label="Serial numbers (comma separated)"
+              value={(open.serialNumbers || []).join(", ")}
               set={(v: string) =>
-                setOpen((p) => ({
-                  ...p,
-                  expiry: v,
-                  ignoreExpiryWarning: false,
-                }))
+                setOpen({
+                  ...open,
+                  serialNumbers: v
+                    .split(",")
+                    .map((x) => x.trim())
+                    .filter(Boolean),
+                })
               }
-              settings={c.settings}
-              date={c.businessDate || day()}
-              checked={open.ignoreExpiryWarning}
-              onCheck={(v: boolean) =>
-                setOpen((p) => ({ ...p, ignoreExpiryWarning: v }))
-              }
-              status={open.status || "SELLABLE"}
             />
             <Field
               label="Stock disposition"
@@ -513,13 +537,32 @@ export default function Inventory(c: any) {
               label="Unit"
               value={open.unit}
               set={(v: any) => setOpen({ ...open, unit: v })}
-              options={["base", "strip", "box"]}
+              options={unitsFor(
+                c.medicines.find((m: Row) => m.id === open.medicineId) || {
+                  baseUnit: "unit",
+                  looseAllowed: true,
+                  unitsPerStrip: 1,
+                  stripsPerBox: 1,
+                },
+              )}
             />
             <div className="modal-actions">
               <Button
                 disabled={
                   c.busy ||
-                  entryBlocked(open, c.settings, c.businessDate || day())
+                  entryBlocked(
+                    {
+                      ...open,
+                      expiry:
+                        open.expiry ||
+                        (!c.medicines.find((m: Row) => m.id === open.medicineId)
+                          ?.expiryTracked
+                          ? "9999-12-31"
+                          : ""),
+                    },
+                    c.settings,
+                    c.businessDate || day(),
+                  )
                 }
               >
                 Confirm opening stock
@@ -562,6 +605,19 @@ export default function Inventory(c: any) {
                 required
               />
             ))}
+            <Field
+              label="Adjusted serial numbers (comma separated, if tracked)"
+              value={(adjustment.serialNumbers || []).join(", ")}
+              set={(v: string) =>
+                setAdjustment({
+                  ...adjustment,
+                  serialNumbers: v
+                    .split(",")
+                    .map((x) => x.trim())
+                    .filter(Boolean),
+                })
+              }
+            />
             <div className="modal-actions">
               <Button disabled={c.busy}>Approve & post adjustment</Button>
             </div>

@@ -76,8 +76,8 @@ export default function ReturnForm({ c, type, original, close }: any) {
         <Field
           label="Quantity (base units)"
           type="number"
-          min="1"
-          step="1"
+          min="0.000001"
+          step="any"
           value={p.quantity}
           set={(v: any) => setP({ ...p, quantity: v })}
           required
@@ -101,6 +101,33 @@ export default function ReturnForm({ c, type, original, close }: any) {
             set={(v: any) => setP({ ...p, disposition: v })}
             options={["QUARANTINED", "SELLABLE", "DAMAGED"]}
           />
+        )}
+        <Field
+          label="Returned serial numbers (comma separated, if tracked)"
+          value={(p.serialNumbers || []).join(", ")}
+          set={(v: string) =>
+            setP({
+              ...p,
+              serialNumbers: v
+                .split(",")
+                .map((x) => x.trim())
+                .filter(Boolean),
+            })
+          }
+        />
+        {type === "SALE" && (
+          <Field
+            label="Refund paid portion by"
+            value={p.refundMethod || "CASH"}
+            options={["CASH", "CARD", "TRANSFER", "ADVANCE"]}
+            set={(v: string) => setP({ ...p, refundMethod: v })}
+          />
+        )}
+        {type === "SALE" && (
+          <p>
+            Unpaid credit is reduced first. Any paid portion is refunded using
+            the selected method, or recorded as an explicit customer advance.
+          </p>
         )}
         <div className="modal-actions">
           <Button disabled={c.busy}>Confirm return</Button>

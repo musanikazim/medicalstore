@@ -1,3 +1,5 @@
+import { MasterSelect } from "../components/master-data";
+import { unitsFor } from "../product-utils";
 import React, { useState, useEffect, useRef } from "react";
 import Decimal from "decimal.js";
 import {
@@ -75,6 +77,11 @@ export default function Medicines(c: any) {
     [category, setCategory] = useState(""),
     [company, setCompany] = useState(""),
     [importRows, setImportRows] = useState<Row[] | null>(null);
+  const types =
+    useData("/master-data?kind=PRODUCT_TYPE", c.version, c.setError) || [];
+  const pharma =
+    types.find((t: Row) => t.id === edit?.productTypeId)?.data
+      ?.pharmaceutical ?? !edit?.productTypeId;
   const isManager = c.user.role !== "CASHIER";
   const searched = useMedicineSearch(
     c.search,
@@ -84,12 +91,6 @@ export default function Medicines(c: any) {
   );
   const list = searched.filter(
     (m: Row) =>
-      (!c.search ||
-        [m.name, m.generic, m.barcode].some((v) =>
-          String(v || "")
-            .toLowerCase()
-            .includes(c.search.toLowerCase()),
-        )) &&
       (!category || m.category === category) &&
       (!company || m.manufacturer === company),
   );
@@ -293,15 +294,76 @@ export default function Medicines(c: any) {
             }}
           >
             <div className="form-grid">
+              <MasterSelect
+                c={c}
+                kind="PRODUCT_TYPE"
+                label="Product type"
+                value={edit.productTypeId}
+                set={(v: string) => {
+                  const policy = types.find((t: Row) => t.id === v)?.data || {};
+                  setEdit({
+                    ...edit,
+                    productTypeId: v,
+                    form: policy.pharmaceutical ? "Tablet" : "",
+                    dosageFormId: null,
+                    batchTracked: !!policy.requiresBatch,
+                    expiryTracked: !!policy.requiresExpiry,
+                  });
+                }}
+              />
+              <MasterSelect
+                c={c}
+                kind="CATEGORY"
+                label="Category"
+                inline
+                value={edit.categoryId}
+                set={(v: string) =>
+                  setEdit((previous: Row | null) => ({
+                    ...previous,
+                    categoryId: v,
+                  }))
+                }
+              />
+              {pharma && (
+                <MasterSelect
+                  c={c}
+                  kind="DOSAGE_FORM"
+                  label="Dosage Form"
+                  inline
+                  value={edit.dosageFormId}
+                  set={(v: string) =>
+                    setEdit((previous: Row | null) => ({
+                      ...previous,
+                      dosageFormId: v,
+                      form: v ? previous?.form : "",
+                    }))
+                  }
+                />
+              )}
+              <MasterSelect
+                c={c}
+                kind="UOM"
+                label="Base unit"
+                value={edit.baseUnitId}
+                set={(v: string) => setEdit({ ...edit, baseUnitId: v })}
+              />
+              <Field
+                label="Barcode type"
+                value={edit.barcodeType || "CODE128"}
+                set={(v: string) => setEdit({ ...edit, barcodeType: v })}
+                options={["CODE128", "EAN13", "EAN8", "UPC_A"]}
+              />
               {[
                 ["name", "Medicine name"],
                 ["generic", "Generic name"],
                 ["strength", "Strength"],
                 ["manufacturer", "Manufacturer"],
-                ["category", "Category"],
+                ["brand", "Brand"],
+                ["specification", "Size / Specification"],
+                ["model", "Model"],
+                ["warranty", "Warranty"],
                 ["barcode", "Barcode"],
-                ["form", "Dosage form"],
-                ["baseUnit", "Base unit"],
+
                 ["unitsPerStrip", "Units per strip", "number"],
                 ["stripsPerBox", "Strips per box", "number"],
                 ["purchasePrice", "Default purchase cost / base", "number"],
@@ -311,20 +373,34 @@ export default function Medicines(c: any) {
                 ["mrp", "MRP / base (optional)", "number"],
                 ["minimumStock", "Minimum stock", "number"],
                 ["reorderQuantity", "Reorder quantity", "number"],
-              ].map(([k, l, t]) => field(k, l, t))}
+              ]
+                .filter(([k]) =>
+                  pharma
+                    ? !["model", "warranty", "specification"].includes(k)
+                    : !["generic", "strength"].includes(k),
+                )
+                .map(([k, l, t]) => field(k, l, t))}
               <Field
                 label="Default purchase unit"
                 value={edit.purchaseUnit}
                 set={(v: any) => setEdit({ ...edit, purchaseUnit: v })}
-                options={["base", "strip", "box"]}
+                options={unitsFor(edit)}
               />
               <Field
                 label="Default selling unit"
                 value={edit.sellingUnit}
                 set={(v: any) => setEdit({ ...edit, sellingUnit: v })}
-                options={["base", "strip", "box"]}
+                options={unitsFor(edit)}
               />
-              {["active", "looseAllowed", "prescription"].map((k) => (
+              {[
+                "active",
+                "looseAllowed",
+                "prescription",
+                "batchTracked",
+                "expiryTracked",
+                "serialTracked",
+                "fractionalAllowed",
+              ].map((k) => (
                 <label className="checkbox" key={k}>
                   <input
                     type="checkbox"
@@ -338,11 +414,117 @@ export default function Medicines(c: any) {
                       active: "Active medicine",
                       looseAllowed: "Allow individual unit sales",
                       prescription: "Prescription required",
+                      batchTracked: "Track batch / lot",
+                      expiryTracked: "Track expiry (required for medicines)",
+                      serialTracked: "Track serial numbers",
+                      fractionalAllowed: "Allow fractional quantities",
                     }[k]
                   }
                 </label>
               ))}
             </div>
+            {edit.mrp !== null &&
+            edit.mrp !== undefined &&
+            Number(edit.salePrice) > Number(edit.mrp) ? (
+              <p className="notice">
+                {edit.name}: Selling price {pk(edit.salePrice)} exceeds MRP{" "}
+                {pk(edit.mrp)}. Review applicable price rules; this warning is
+                not legal approval.
+              </p>
+            ) : null}
+            <h3>Additional packaging conversions</h3>
+            <p>
+              Enter the number of base units in one selected package. Existing
+              stock conversions cannot be changed.
+            </p>
+            {(edit.packaging || []).map((p: Row, i: number) => (
+              <div className="form-grid" key={i}>
+                <MasterSelect
+                  c={c}
+                  kind="UOM"
+                  label="Package unit"
+                  value={p.unitId}
+                  set={(v: string) =>
+                    setEdit({
+                      ...edit,
+                      packaging: edit.packaging.map((x: Row, n: number) =>
+                        n === i ? { ...x, unitId: v } : x,
+                      ),
+                    })
+                  }
+                />
+                {["factor", "salePrice"].map((k) => (
+                  <Field
+                    key={k}
+                    label={
+                      k === "factor"
+                        ? "Base units per package"
+                        : "Package sale price (optional)"
+                    }
+                    type="number"
+                    value={p[k]}
+                    set={(v: any) =>
+                      setEdit({
+                        ...edit,
+                        packaging: edit.packaging.map((x: Row, n: number) =>
+                          n === i ? { ...x, [k]: v === "" ? null : v } : x,
+                        ),
+                      })
+                    }
+                  />
+                ))}
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={!!p.fractionalAllowed}
+                    onChange={(e) =>
+                      setEdit({
+                        ...edit,
+                        packaging: edit.packaging.map((x: Row, n: number) =>
+                          n === i
+                            ? { ...x, fractionalAllowed: e.target.checked }
+                            : x,
+                        ),
+                      })
+                    }
+                  />
+                  Fractional package quantities
+                </label>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setEdit({
+                      ...edit,
+                      packaging: edit.packaging.filter(
+                        (_: any, n: number) => n !== i,
+                      ),
+                    })
+                  }
+                >
+                  Remove conversion
+                </button>
+              </div>
+            ))}
+            <Button
+              secondary
+              type="button"
+              onClick={() =>
+                setEdit({
+                  ...edit,
+                  packaging: [
+                    ...(edit.packaging || []),
+                    {
+                      unitId: "",
+                      factor: 1,
+                      salePrice: null,
+                      fractionalAllowed: false,
+                    },
+                  ],
+                })
+              }
+            >
+              Add packaging
+            </Button>
             <div className="modal-actions">
               <Button secondary type="button" onClick={() => setEdit(null)}>
                 Cancel

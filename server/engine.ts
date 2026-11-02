@@ -1,17 +1,50 @@
+import {
+  validatePayments,
+  recordCreditSale,
+  creditReturn,
+  paymentSchema,
+} from "./finance";
+import { validateCart, CartValidationError } from "./carts";
+import {
+  prepareProduct,
+  productFields,
+  resolveUnit,
+  stockIdentity,
+  receiveSerials,
+} from "./catalogue";
+import {
+  db,
+  D,
+  money,
+  today,
+  transaction,
+  audit,
+  once,
+  requireRole,
+  managers,
+  qty,
+  type Actor,
+} from "./core";
+export {
+  db,
+  D,
+  money,
+  today,
+  transaction,
+  audit,
+  once,
+  requireRole,
+  managers,
+  type Actor,
+} from "./core";
 import "dotenv/config";
-import { PrismaClient, Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import Decimal from "decimal.js";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { validateStockExpiry } from "./expiry";
 import { businessDate, normalizeExpiry } from "../shared/expiry";
-export const db = new PrismaClient({
-  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
-});
-export const D = (v: Decimal.Value) => new Decimal(v);
-export const money = (v: Decimal.Value) => D(v).toDecimalPlaces(2);
-export const today = businessDate;
 export const date = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -33,6 +66,14 @@ const currency = amount.refine(
   "Use at most two decimal places",
 );
 const integer = z.number().int().positive().max(10000000);
+const quantity = z
+  .union([z.number(), z.string()])
+  .transform((v) => Number(v))
+  .refine(
+    (v) =>
+      Number.isFinite(v) && v > 0 && v <= 10000000 && D(v).decimalPlaces() <= 6,
+    "Enter a positive quantity with at most six decimals",
+  );
 const text = z.string().trim().min(1).max(250);
 export const medicineSchema = z.object({
   name: text,
@@ -41,10 +82,10 @@ export const medicineSchema = z.object({
   category: z.string().max(100).default(""),
   barcode: z.string().max(100).nullable().default(null),
   strength: z.string().max(100).default(""),
-  form: text.default("Tablet"),
+  form: z.string().max(150).default("Tablet"),
   baseUnit: text.default("tablet"),
-  purchaseUnit: z.enum(["base", "strip", "box"]).default("box"),
-  sellingUnit: z.enum(["base", "strip", "box"]).default("base"),
+  purchaseUnit: text.default("box"),
+  sellingUnit: text.default("base"),
   unitsPerStrip: integer.default(10),
   stripsPerBox: integer.default(10),
   looseAllowed: z.boolean().default(true),
@@ -57,11 +98,12 @@ export const medicineSchema = z.object({
   minimumStock: z.number().int().nonnegative().default(10),
   reorderQuantity: integer.default(100),
   active: z.boolean().default(true),
+  ...productFields,
 });
 const item = z.object({
   medicineId: text,
-  unit: z.enum(["base", "strip", "box"]),
-  quantity: integer,
+  unit: text,
+  quantity,
 });
 export const purchaseSchema = z.object({
   supplierId: text,
@@ -74,13 +116,20 @@ export const purchaseSchema = z.object({
   lines: z
     .array(
       item.extend({
-        batchNumber: text,
+        batchNumber: z.string().max(250).default(""),
         ignoreExpiryWarning: z.boolean().default(false),
-        expiry: expiryDate,
-        bonus: z.number().int().nonnegative().max(10000000).default(0),
+        expiry: z.union([expiryDate, z.literal("")]).default(""),
+        bonus: z
+          .number()
+          .nonnegative()
+          .max(10000000)
+          .refine((v) => D(v).decimalPlaces() <= 6)
+          .default(0),
         unitCost: amount,
         discount: currency.default("0"),
         sellingPrice: amount,
+        mrp: amount.nullable().optional(),
+        serialNumbers: z.array(text).max(10000).default([]),
       }),
     )
     .min(1)
@@ -89,19 +138,28 @@ export const purchaseSchema = z.object({
 export const saleSchema = z.object({
   key: z.string().uuid(),
   lines: z
-    .array(item.extend({ discount: currency.default("0") }))
+    .array(
+      item.extend({
+        discount: currency.default("0"),
+        expectedPrice: amount.optional(),
+        acceptPriceChange: z.boolean().default(false),
+        serialNumbers: z.array(text).max(10000).default([]),
+      }),
+    )
     .min(1)
     .max(200),
   discount: currency.default("0"),
-  payment: z.enum(["CASH", "CARD", "RAAST", "OTHER"]),
-  tendered: currency,
+  payment: z
+    .enum(["CASH", "CARD", "RAAST", "OTHER", "TRANSFER", "CREDIT", "ADVANCE"])
+    .default("CASH"),
+  tendered: currency.default("0"),
+  payments: z.array(paymentSchema).max(20).optional(),
+  customerId: z.string().nullable().optional(),
+  notes: z.string().max(2000).default(""),
+  draftId: z.string().uuid().optional(),
+  draftVersion: z.number().int().positive().optional(),
   prescriptionReference: z.string().max(250).default(""),
 });
-export type Actor = { id: string; role: string };
-export function requireRole(a: Actor, roles: string[]) {
-  if (!roles.includes(a.role)) throw new Error("FORBIDDEN");
-}
-export const managers = ["ADMIN", "MANAGER"];
 export function factor(
   m: { unitsPerStrip: number; stripsPerBox: number; looseAllowed: boolean },
   unit: string,
@@ -118,62 +176,6 @@ export function factor(
     throw new Error("Invalid packaging conversion");
   return n;
 }
-export async function transaction<T>(
-  fn: (t: Prisma.TransactionClient) => Promise<T>,
-): Promise<T> {
-  for (let i = 0; i < 5; i++) {
-    try {
-      return await db.$transaction(
-        async (t) => {
-          await t.$executeRaw`SELECT pg_advisory_xact_lock(4815162342::bigint)`;
-          return fn(t);
-        },
-        { isolationLevel: "Serializable", maxWait: 15000, timeout: 30000 },
-      );
-    } catch (e: any) {
-      if (e.code === "P2034" && i < 4) continue;
-      throw e;
-    }
-  }
-  throw new Error("Transaction retry exhausted");
-}
-export async function audit(
-  t: Prisma.TransactionClient,
-  a: Actor,
-  action: string,
-  entity: string,
-  details: any = {},
-) {
-  await t.audit.create({
-    data: {
-      userId: a.id,
-      action,
-      entity,
-      details: JSON.parse(JSON.stringify(details)),
-    },
-  });
-}
-async function once(
-  t: Prisma.TransactionClient,
-  key: string,
-  payload: any,
-  fn: () => Promise<any>,
-) {
-  const hash = createHash("sha256")
-    .update(JSON.stringify(payload))
-    .digest("hex");
-  const old = await t.operation.findUnique({ where: { key } });
-  if (old) {
-    if (old.hash !== hash)
-      throw new Error(
-        "Idempotency key was already used for a different request",
-      );
-    return old.result;
-  }
-  const result = JSON.parse(JSON.stringify(await fn()));
-  await t.operation.create({ data: { key, hash, result } });
-  return result;
-}
 async function move(
   t: Prisma.TransactionClient,
   a: Actor,
@@ -185,7 +187,8 @@ async function move(
   effectiveDate = today(),
 ) {
   const b = await t.batch.findUniqueOrThrow({ where: { id: batchId } });
-  if (b.quantity + quantity < 0) throw new Error("Insufficient batch stock");
+  if (D(b.quantity.toString()).plus(quantity).lt(0))
+    throw new Error("Insufficient batch stock");
   await t.batch.update({
     where: { id: batchId },
     data: { quantity: { increment: quantity } },
@@ -204,9 +207,13 @@ async function move(
 }
 export async function saveMedicine(a: Actor, input: unknown, id?: string) {
   requireRole(a, managers);
-  const data = medicineSchema.parse(input);
-  data.barcode = data.barcode || null;
+  const parsed = medicineSchema.parse(input);
+  parsed.barcode = parsed.barcode || null;
   return transaction(async (t) => {
+    const oldProduct = id
+      ? await t.medicine.findUniqueOrThrow({ where: { id } })
+      : undefined;
+    const { data, units } = await prepareProduct(t, parsed, oldProduct);
     if (id) {
       const used = await t.batch.count({ where: { medicineId: id } });
       const usedSales = await t.saleLine.count({ where: { medicineId: id } });
@@ -224,6 +231,18 @@ export async function saveMedicine(a: Actor, input: unknown, id?: string) {
     const m = id
       ? await t.medicine.update({ where: { id }, data })
       : await t.medicine.create({ data });
+    await t.productUnit.deleteMany({ where: { medicineId: m.id } });
+    if (units.length)
+      await t.productUnit.createMany({
+        data: units.map((u) => ({ ...u, medicineId: m.id })),
+      });
+    if (m.mrp && m.salePrice.gt(m.mrp))
+      await audit(t, a, "MRP_WARNING", m.id, {
+        product: m.name,
+        mrp: m.mrp.toString(),
+        sellingPrice: m.salePrice.toString(),
+        notice: "Recorded warning; not a legal approval",
+      });
     await audit(t, a, id ? "MEDICINE_UPDATE" : "MEDICINE_CREATE", m.id, data);
     return m;
   });
@@ -244,17 +263,22 @@ export async function savePurchase(a: Actor, input: unknown, id?: string) {
         where: { id: l.medicineId },
       });
       if (!m.active) throw new Error("Medicine inactive");
-      const f =
-        l.unit === "box"
-          ? m.unitsPerStrip * m.stripsPerBox
-          : l.unit === "strip"
-            ? m.unitsPerStrip
-            : 1;
+      const conversion = await resolveUnit(t, m, l.unit, l.quantity);
+      const f = conversion.factor;
+      const identity = stockIdentity(m, l.batchNumber, l.expiry);
+      if (l.bonus) await resolveUnit(t, m, l.unit, l.bonus);
       const net = money(D(l.unitCost).mul(l.quantity).minus(l.discount));
       if (net.isNegative()) throw new Error("Line discount exceeds line value");
       if ((l.quantity + l.bonus) * f > 100000000)
         throw new Error("Quantity too large");
-      lines.push({ ...l, factor: f, net: net.toFixed(6) });
+      lines.push({
+        ...l,
+        mrp: l.mrp === undefined ? m.mrp : l.mrp,
+        ...identity,
+        factor: f,
+        unitLabel: conversion.name,
+        net: net.toFixed(6),
+      });
     }
     const total = money(
       Decimal.sum(...lines.map((l) => l.net))
@@ -288,8 +312,8 @@ export async function postPurchase(
       z.object({
         lineId: text,
         medicineId: text,
-        batchNumber: text,
-        expiry: expiryDate,
+        batchNumber: z.string().max(250).default(""),
+        expiry: z.union([expiryDate, z.literal("")]).default(""),
       }),
     )
     .max(200)
@@ -333,7 +357,11 @@ export async function postPurchase(
         let allocated = D(0);
         for (let i = 0; i < p.lines.length; i++) {
           const l = p.lines[i];
-          const received = (l.quantity + l.bonus) * l.factor;
+          const received = qty(
+            D(l.quantity.toString())
+              .plus(l.bonus.toString())
+              .mul(l.factor.toString()),
+          );
           const costTotal =
             i === p.lines.length - 1
               ? D(p.total.toString()).minus(allocated)
@@ -357,9 +385,27 @@ export async function postPurchase(
               received,
               quantity: 0,
               cost: costTotal.div(received).toFixed(6),
+              mrp: l.mrp,
             },
           });
+          const m = await t.medicine.findUniqueOrThrow({
+            where: { id: l.medicineId },
+          });
+          await receiveSerials(
+            t,
+            m,
+            batch.id,
+            received,
+            l.serialNumbers as string[],
+          );
           await move(t, a, batch.id, received, "PURCHASE", p.id);
+          if (l.mrp && l.sellingPrice.gt(l.mrp))
+            await audit(t, a, "MRP_WARNING", p.id, {
+              product: m.name,
+              batch: l.batchNumber,
+              mrp: l.mrp.toString(),
+              sellingPrice: l.sellingPrice.toString(),
+            });
           await t.medicine.update({
             where: { id: l.medicineId },
             data: { salePrice: l.sellingPrice },
@@ -387,6 +433,27 @@ export async function completeSale(a: Actor, input: unknown) {
       const store =
         ((await t.settings.findUnique({ where: { id: "store" } }))
           ?.data as any) || {};
+      const validation = await validateCart(
+        t,
+        p.lines,
+        p.prescriptionReference,
+        store,
+      );
+      if (validation.issues.length)
+        throw new CartValidationError(validation.issues);
+      if (p.draftId) {
+        const draft = await t.posDraft.findUniqueOrThrow({
+          where: { id: p.draftId },
+        });
+        if (draft.ownerId !== a.id) throw new Error("FORBIDDEN");
+        if (
+          !["ACTIVE", "HELD"].includes(draft.status) ||
+          draft.version !== p.draftVersion
+        )
+          throw new Error(
+            "Draft changed or is already closed; resume the latest version",
+          );
+      }
       const planned = [];
       let subtotal = D(0),
         cogs = D(0);
@@ -404,20 +471,18 @@ export async function completeSale(a: Actor, input: unknown) {
           m.unitsPerStrip > 1
         )
           throw new Error("Loose unit sales are disabled by store policy");
-        const f = factor(m, l.unit),
-          needed = l.quantity * f;
-        if (!Number.isSafeInteger(needed) || needed > 100000000)
-          throw new Error("Quantity too large");
-        const price = D(
-          (l.unit === "box"
-            ? (m.boxPrice ?? m.salePrice.mul(f))
-            : l.unit === "strip"
-              ? (m.stripPrice ?? m.salePrice.mul(f))
-              : m.salePrice
-          ).toString(),
-        );
+        const conversion = await resolveUnit(t, m, l.unit, l.quantity, true);
+        const f = conversion.factor,
+          needed = conversion.quantity,
+          price = conversion.price;
         if (m.mrp && price.gt(D(m.mrp.toString()).mul(f)))
-          throw new Error("Selling price exceeds configured base-unit MRP");
+          await audit(t, a, "MRP_WARNING", m.id, {
+            product: m.name,
+            mrp: m.mrp.toString(),
+            sellingPrice: price.toString(),
+            unit: conversion.name,
+            source: "SALE",
+          });
         const net = money(price.mul(l.quantity).minus(l.discount));
         if (net.isNegative()) throw new Error("Discount exceeds line value");
         let remaining = needed,
@@ -433,13 +498,34 @@ export async function completeSale(a: Actor, input: unknown) {
           orderBy: [{ expiry: "asc" }, { id: "asc" }],
         });
         for (const b of batches) {
-          const available = b.quantity - (reserved.get(b.id) || 0);
-          const take = Math.min(remaining, available);
+          const available = qty(
+            D(b.quantity.toString()).minus(reserved.get(b.id) || 0),
+          );
+          const serials = m.serialTracked
+            ? await t.stockSerial.findMany({
+                where: {
+                  batchId: b.id,
+                  status: "AVAILABLE",
+                  serial: { in: l.serialNumbers },
+                },
+                orderBy: { serial: "asc" },
+              })
+            : [];
+          const take = Math.min(
+            remaining,
+            available,
+            m.serialTracked ? serials.length : Infinity,
+          );
           if (take <= 0) continue;
           reserved.set(b.id, (reserved.get(b.id) || 0) + take);
-          allocations.push({ batchId: b.id, quantity: take, cost: b.cost });
+          allocations.push({
+            batchId: b.id,
+            quantity: take,
+            cost: b.cost,
+            serialNumbers: serials.slice(0, take).map((x) => x.serial),
+          });
           lineCost = lineCost.plus(D(b.cost.toString()).mul(take));
-          remaining -= take;
+          remaining = qty(D(remaining).minus(take));
           if (!remaining) break;
         }
         if (remaining)
@@ -449,6 +535,8 @@ export async function completeSale(a: Actor, input: unknown) {
         planned.push({
           ...l,
           factor: f,
+          unitLabel: conversion.name,
+          mrp: m.mrp,
           name: m.name,
           price: price.toFixed(6),
           net,
@@ -473,25 +561,75 @@ export async function completeSale(a: Actor, input: unknown) {
         );
       if (D(p.discount).gt(subtotal))
         throw new Error("Invoice discount exceeds subtotal");
-      const total = money(subtotal.minus(p.discount));
-      if (p.payment === "CASH" && D(p.tendered).lt(total))
-        throw new Error("Cash tendered is less than total");
+      const netBase = money(subtotal.minus(p.discount));
+      const tax = money(netBase.mul(Number(store.taxRate || 0)).div(100));
+      const total = netBase.plus(tax);
+      const inputs = p.payments || [
+        {
+          method: p.payment,
+          amount: total.toFixed(2),
+          tendered: p.tendered,
+          reference: "",
+          cardLastFour: "",
+          terminal: "",
+          remarks: "",
+        },
+      ];
+      const settlement = await validatePayments(
+        t,
+        a,
+        total,
+        inputs,
+        p.customerId,
+      );
+      const dueDate = new Date(
+        Date.parse(today() + "T00:00:00Z") +
+          (settlement.customer?.creditDays ?? 30) * 86400000,
+      )
+        .toISOString()
+        .slice(0, 10);
+      const cashier = await t.user.findUnique({
+        where: { id: a.id },
+        select: { name: true },
+      });
       const sale = await t.sale.create({
         data: {
           createdBy: a.id,
           total: total.toFixed(6),
+          tax: tax.toFixed(6),
           cogs: cogs.toFixed(6),
           discount: p.discount,
           prescriptionReference: p.prescriptionReference,
+          customerId: p.customerId,
+          customerName: settlement.customer?.name || "",
+          cashierName: cashier?.name || a.id,
+          invoicePrefix: String(store.invoicePrefix || "MS"),
+          notes: p.notes,
+          creditAmount: settlement.credit.toFixed(6),
+          dueDate: settlement.credit.gt(0) ? dueDate : null,
           payments: {
-            create: {
-              method: p.payment,
-              amount: total.toFixed(6),
-              tendered: p.payment === "CASH" ? p.tendered : total.toFixed(6),
-            },
+            create: inputs.map((x) => ({
+              ...x,
+              amount: x.amount,
+              tendered:
+                x.method === "CASH" ? (x.tendered ?? x.amount) : x.amount,
+              paymentDate: x.paymentDate || today(),
+              verification: "OPERATOR_RECORDED",
+            })),
           },
         },
       });
+      await recordCreditSale(
+        t,
+        a,
+        sale.id,
+        p.customerId,
+        settlement.credit,
+        settlement.advance,
+        dueDate,
+      );
+      let allocatedTax = D(0),
+        cumulativeTaxBase = D(0);
       let allocatedDiscount = D(0),
         cumulativeNet = D(0);
       for (let i = 0; i < planned.length; i++) {
@@ -508,11 +646,24 @@ export async function completeSale(a: Actor, input: unknown) {
                   .toDecimalPlaces(2)
                   .minus(allocatedDiscount);
         allocatedDiscount = allocatedDiscount.plus(share);
+        const finalNet = l.net.minus(share);
+        cumulativeTaxBase = cumulativeTaxBase.plus(finalNet);
+        const lineTax =
+          i === planned.length - 1
+            ? tax.minus(allocatedTax)
+            : netBase.isZero()
+              ? D(0)
+              : money(tax.mul(cumulativeTaxBase).div(netBase)).minus(
+                  allocatedTax,
+                );
+        allocatedTax = allocatedTax.plus(lineTax);
         const line = await t.saleLine.create({
           data: {
             saleId: sale.id,
             medicineId: l.medicineId,
             name: l.name,
+            unitLabel: l.unitLabel,
+            mrp: l.mrp,
             unit: l.unit,
             factor: l.factor,
             quantity: l.quantity,
@@ -520,21 +671,49 @@ export async function completeSale(a: Actor, input: unknown) {
             discount: D(l.discount).plus(share).toFixed(6),
             net: l.net.minus(share).toFixed(6),
             cogs: l.cogs.toFixed(6),
+            tax: lineTax.toFixed(6),
             allocations: { create: l.allocations },
           },
         });
+        if (l.allocations.some((x) => x.serialNumbers.length)) {
+          const created = await t.allocation.findMany({
+            where: { saleLineId: line.id },
+          });
+          for (const allocation of created) {
+            const names = allocation.serialNumbers as string[];
+            if (names.length) {
+              const updated = await t.stockSerial.updateMany({
+                where: {
+                  batchId: allocation.batchId,
+                  serial: { in: names },
+                  status: "AVAILABLE",
+                },
+                data: { status: "SOLD", allocationId: allocation.id },
+              });
+              if (updated.count !== names.length)
+                throw new Error(
+                  l.name + ": selected serial numbers are unavailable",
+                );
+            }
+          }
+        }
         for (const al of l.allocations)
           await move(t, a, al.batchId, -al.quantity, "SALE", sale.id);
       }
+      if (p.draftId)
+        await t.posDraft.update({
+          where: { id: p.draftId },
+          data: { status: "COMPLETED", version: { increment: 1 } },
+        });
       await audit(t, a, "SALE_POST", sale.id);
       return {
         id: sale.id,
         number: sale.number,
         total: sale.total.toString(),
-        change:
-          p.payment === "CASH"
-            ? money(D(p.tendered).minus(total)).toFixed(2)
-            : "0.00",
+        change: settlement.change.toFixed(2),
+        creditAmount: settlement.credit.toFixed(2),
+        tax: tax.toFixed(2),
+        warnings: validation.warnings,
       };
     }),
   );
@@ -542,12 +721,13 @@ export async function completeSale(a: Actor, input: unknown) {
 const openingSchema = z.object({
   key: z.string().uuid(),
   medicineId: text,
-  batchNumber: text,
-  expiry: expiryDate,
-  quantity: integer,
-  unit: z.enum(["base", "strip", "box"]),
+  batchNumber: z.string().max(250).default(""),
+  expiry: z.union([expiryDate, z.literal("")]).default(""),
+  quantity,
+  unit: text,
   unitCost: amount,
   reference: text,
+  serialNumbers: z.array(text).max(10000).default([]),
   ignoreExpiryWarning: z.boolean().default(false),
   status: z
     .enum(["SELLABLE", "QUARANTINED", "DAMAGED", "RECALLED"])
@@ -580,13 +760,12 @@ export async function opening(a: Actor, input: unknown) {
         throw new Error(
           "Duplicate opening stock reference for this medicine and batch",
         );
-      const f =
-        p.unit === "box"
-          ? m.unitsPerStrip * m.stripsPerBox
-          : p.unit === "strip"
-            ? m.unitsPerStrip
-            : 1;
-      const n = p.quantity * f;
+      const identity = stockIdentity(m, p.batchNumber, p.expiry);
+      p.batchNumber = identity.batchNumber;
+      p.expiry = identity.expiry;
+      const conversion = await resolveUnit(t, m, p.unit, p.quantity);
+      const f = conversion.factor,
+        n = conversion.quantity;
       if (n > 100000000) throw new Error("Quantity too large");
       const expiryOverride = await validateStockExpiry(t, p, "OPENING");
       const b = await t.batch.create({
@@ -597,9 +776,11 @@ export async function opening(a: Actor, input: unknown) {
           status: p.status,
           quantity: 0,
           received: n,
+          mrp: m.mrp,
           cost: D(p.unitCost).div(f).toFixed(6),
         },
       });
+      await receiveSerials(t, m, b.id, n, p.serialNumbers);
       await move(
         t,
         a,
@@ -629,16 +810,56 @@ export async function adjust(a: Actor, input: unknown) {
       batchId: text,
       quantity: z
         .number()
-        .int()
+        .refine((v) => D(v).decimalPlaces() <= 6)
         .min(-100000000)
         .max(100000000)
         .refine((n) => n !== 0),
       reason: text,
       reference: text,
+      serialNumbers: z.array(text).max(10000).default([]),
     })
     .parse(input);
   return transaction((t) =>
     once(t, p.key, { ...p, type: "adjust", actor: a.id }, async () => {
+      const serialBatch = await t.batch.findUniqueOrThrow({
+        where: { id: p.batchId },
+        include: { medicine: true },
+      });
+      if (
+        !serialBatch.medicine.fractionalAllowed &&
+        !Number.isInteger(p.quantity)
+      )
+        throw new Error(
+          serialBatch.medicine.name +
+            ": fractional adjustment is not permitted",
+        );
+      if (serialBatch.medicine.serialTracked) {
+        if (
+          p.serialNumbers.length !== Math.abs(p.quantity) ||
+          new Set(p.serialNumbers).size !== p.serialNumbers.length
+        )
+          throw new Error("Enter one serial per adjusted base unit");
+        if (p.quantity > 0)
+          await receiveSerials(
+            t,
+            serialBatch.medicine,
+            p.batchId,
+            p.quantity,
+            p.serialNumbers,
+          );
+        else {
+          const updated = await t.stockSerial.updateMany({
+            where: {
+              batchId: p.batchId,
+              serial: { in: p.serialNumbers },
+              status: { notIn: ["SOLD", "DISPOSED"] },
+            },
+            data: { status: "DISPOSED", allocationId: null },
+          });
+          if (updated.count !== p.serialNumbers.length)
+            throw new Error("Serials do not match available stock");
+        }
+      }
       await move(
         t,
         a,
@@ -684,6 +905,10 @@ export async function batchStatus(
         ...override,
         sourceTransaction: id,
       });
+    await t.stockSerial.updateMany({
+      where: { batchId: id, status: { notIn: ["SOLD", "DISPOSED"] } },
+      data: { status: status === "SELLABLE" ? "AVAILABLE" : status },
+    });
     await audit(t, a, "BATCH_STATUS", id, { status, reason });
     return out;
   });
@@ -695,9 +920,13 @@ export async function returnStock(a: Actor, input: unknown) {
       key: z.string().uuid(),
       type: z.enum(["SALE", "PURCHASE"]),
       originalId: text,
-      quantity: integer,
+      quantity,
       reason: text,
       reference: text,
+      serialNumbers: z.array(text).max(10000).default([]),
+      refundMethod: z
+        .enum(["CASH", "CARD", "TRANSFER", "ADVANCE"])
+        .default("CASH"),
       disposition: z
         .enum(["SELLABLE", "QUARANTINED", "DAMAGED"])
         .default("QUARANTINED"),
@@ -714,7 +943,11 @@ export async function returnStock(a: Actor, input: unknown) {
             where: { id: p.originalId },
             include: { saleLine: true, batch: true },
           });
-          if (p.quantity > al.quantity - al.returned)
+          if (
+            D(p.quantity).gt(
+              D(al.quantity.toString()).minus(al.returned.toString()),
+            )
+          )
             throw new Error("Return exceeds original sale quantity");
           if (
             p.disposition === "SELLABLE" &&
@@ -731,7 +964,7 @@ export async function returnStock(a: Actor, input: unknown) {
             },
           });
           const returned = allAllocations.reduce(
-            (sum, x) => sum + x.returned,
+            (sum, x) => qty(D(sum).plus(x.returned.toString())),
             0,
           );
           const refunded = prior.reduce(
@@ -740,10 +973,58 @@ export async function returnStock(a: Actor, input: unknown) {
           );
           const amount = money(
             D(al.saleLine.net.toString())
+              .plus(al.saleLine.tax.toString())
               .mul(returned + p.quantity)
-              .div(al.saleLine.quantity * al.saleLine.factor),
+              .div(
+                qty(
+                  D(al.saleLine.quantity.toString()).mul(
+                    al.saleLine.factor.toString(),
+                  ),
+                ),
+              ),
           ).minus(refunded);
           const cogs = D(al.cost.toString()).mul(p.quantity);
+          const priorTax = prior.reduce(
+            (sum, x) => sum.plus(x.tax.toString()),
+            D(0),
+          );
+          const returnTax = money(
+            D(al.saleLine.tax.toString())
+              .mul(returned + p.quantity)
+              .div(
+                qty(
+                  D(al.saleLine.quantity.toString()).mul(
+                    al.saleLine.factor.toString(),
+                  ),
+                ),
+              ),
+          ).minus(priorTax);
+          const product = await t.medicine.findUniqueOrThrow({
+            where: { id: al.saleLine.medicineId },
+          });
+          if (!product.fractionalAllowed && !Number.isInteger(p.quantity))
+            throw new Error(
+              product.name + ": fractional returns are not permitted",
+            );
+          if (product.serialTracked) {
+            if (
+              p.serialNumbers.length !== p.quantity ||
+              new Set(p.serialNumbers).size !== p.serialNumbers.length
+            )
+              throw new Error("Select the exact returned serial numbers");
+            const matches = await t.stockSerial.count({
+              where: {
+                allocationId: al.id,
+                serial: { in: p.serialNumbers },
+                status: "SOLD",
+              },
+            });
+            if (matches !== p.serialNumbers.length)
+              throw new Error(
+                "Returned serial numbers do not match the original sale",
+              );
+          } else if (p.serialNumbers.length)
+            throw new Error("Serial tracking is not enabled for this product");
           const b =
             p.disposition === "SELLABLE"
               ? al.batch
@@ -757,11 +1038,25 @@ export async function returnStock(a: Actor, input: unknown) {
                     quantity: 0,
                     received: p.quantity,
                     cost: al.cost,
+                    mrp: al.batch.mrp,
                   },
                 });
+          const returnId = crypto.randomUUID();
+          const financial = await creditReturn(
+            t,
+            a,
+            al.saleLine.saleId,
+            amount,
+            returnId,
+            p.refundMethod,
+          );
           const r = await t.returnRecord.create({
             data: {
+              id: returnId,
               type: "SALE",
+              ...financial,
+              tax: returnTax.toFixed(6),
+              serialNumbers: p.serialNumbers,
               reference: p.reference,
               originalId: al.id,
               batchId: b.id,
@@ -773,6 +1068,16 @@ export async function returnStock(a: Actor, input: unknown) {
               createdBy: a.id,
             },
           });
+          if (product.serialTracked)
+            await t.stockSerial.updateMany({
+              where: { allocationId: al.id, serial: { in: p.serialNumbers } },
+              data: {
+                batchId: b.id,
+                status:
+                  p.disposition === "SELLABLE" ? "AVAILABLE" : p.disposition,
+                allocationId: null,
+              },
+            });
           await t.allocation.update({
             where: { id: al.id },
             data: { returned: { increment: p.quantity } },
@@ -792,11 +1097,39 @@ export async function returnStock(a: Actor, input: unknown) {
           _sum: { quantity: true },
         });
         if (
-          p.quantity + (old._sum.quantity || 0) >
-          (b.purchaseLine.quantity + b.purchaseLine.bonus) *
-            b.purchaseLine.factor
+          D(p.quantity)
+            .plus(old._sum.quantity?.toString() || 0)
+            .gt(
+              D(b.purchaseLine.quantity.toString())
+                .plus(b.purchaseLine.bonus.toString())
+                .mul(b.purchaseLine.factor.toString()),
+            )
         )
           throw new Error("Return exceeds purchase quantity");
+        const product = await t.medicine.findUniqueOrThrow({
+          where: { id: b.medicineId },
+        });
+        if (!product.fractionalAllowed && !Number.isInteger(p.quantity))
+          throw new Error(
+            product.name + ": fractional returns are not permitted",
+          );
+        if (product.serialTracked) {
+          if (
+            p.serialNumbers.length !== p.quantity ||
+            new Set(p.serialNumbers).size !== p.serialNumbers.length
+          )
+            throw new Error("Select the exact supplier-return serial numbers");
+          const updated = await t.stockSerial.updateMany({
+            where: {
+              batchId: b.id,
+              serial: { in: p.serialNumbers },
+              status: { notIn: ["SOLD", "DISPOSED"] },
+            },
+            data: { status: "DISPOSED", allocationId: null },
+          });
+          if (updated.count !== p.serialNumbers.length)
+            throw new Error("Supplier-return serials are unavailable");
+        }
         const value = D(b.cost.toString()).mul(p.quantity);
         const r = await t.returnRecord.create({
           data: {
@@ -851,13 +1184,12 @@ export async function importOpening(a: Actor, input: unknown) {
           })
         )
           throw new Error("Duplicate opening stock row for " + m.name);
-        const f =
-          row.unit === "box"
-            ? m.unitsPerStrip * m.stripsPerBox
-            : row.unit === "strip"
-              ? m.unitsPerStrip
-              : 1;
-        const quantity = row.quantity * f;
+        const identity = stockIdentity(m, row.batchNumber, row.expiry);
+        row.batchNumber = identity.batchNumber;
+        row.expiry = identity.expiry;
+        const conversion = await resolveUnit(t, m, row.unit, row.quantity);
+        const f = conversion.factor,
+          quantity = conversion.quantity;
         if (quantity > 100000000) throw new Error("Quantity too large");
         const expiryOverride = await validateStockExpiry(
           t,
@@ -872,9 +1204,11 @@ export async function importOpening(a: Actor, input: unknown) {
             status: row.status,
             quantity: 0,
             received: quantity,
+            mrp: m.mrp,
             cost: D(row.unitCost).div(f).toFixed(6),
           },
         });
+        await receiveSerials(t, m, b.id, quantity, row.serialNumbers);
         await move(
           t,
           a,

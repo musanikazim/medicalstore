@@ -30,7 +30,7 @@ export async function api(path: string, body?: any, method?: string) {
   if (!r.ok) {
     if (r.status === 401 && path !== "/auth/login")
       window.dispatchEvent(new Event("signed-out"));
-    throw new Error(value.error || "Request failed");
+    throw Object.assign(new Error(value.error || "Request failed"), {issues:value.issues});
   }
   return value;
 }

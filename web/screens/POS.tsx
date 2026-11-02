@@ -1,3 +1,5 @@
+import { unitsFor, unitPrice, unitFactor } from "../product-utils";
+import { CustomerForm, PaymentFields } from "./Customers";
 import { ExpiryBadge } from "../components/expiry";
 import { expiryStatus, expiryThreshold } from "../../shared/expiry";
 import React, { useState, useEffect, useRef } from "react";
@@ -63,6 +65,175 @@ export default function POS(c: any) {
     [saleQuery, setSaleQuery] = useState(""),
     [from, setFrom] = useState(""),
     [to, setTo] = useState("");
+  const [customerId, setCustomerId] = useState(""),
+    [customerSearch, setCustomerSearch] = useState(""),
+    [quickCustomer, setQuickCustomer] = useState(false),
+    [payments, setPayments] = useState<Row[]>([]),
+    [notes, setNotes] = useState(""),
+    [issues, setIssues] = useState<Row[]>([]),
+    [draftVersion, bumpDrafts] = useState(0),
+    [draftStatus, setDraftStatus] = useState("Not saved"),
+    [recovery, setRecovery] = useState<Row | null>(null);
+  const customers =
+    useData(
+      "/customers?q=" + encodeURIComponent(customerSearch),
+      c.version,
+      c.setError,
+    ) || [];
+  const banks = useData("/bank-accounts", c.version, c.setError) || [];
+  const held =
+    useData("/pos-drafts", c.version + draftVersion, c.setError) || [];
+  const draft = useRef({ id: crypto.randomUUID(), version: 0 });
+  const saveQueue = useRef<Promise<any>>(Promise.resolve());
+  const mounted = useRef(true);
+  const storageKey = "sehat-pos-" + c.user.id;
+  const latest = useRef<Row>({});
+  latest.current = {
+    lines: cart.map(({ medicine, ...l }) => ({
+      ...l,
+      expectedPrice: l.expectedPrice ?? unitPrice(medicine, l.unit),
+    })),
+    discount,
+    customerId: customerId || null,
+    payments,
+    payment,
+    tendered,
+    prescriptionReference: prescription,
+    notes,
+  };
+  const saveNow = (status = "ACTIVE", data = latest.current) => {
+    const identity = draft.current;
+    const task = saveQueue.current
+      .catch(() => {})
+      .then(async () => {
+        const saved = await api(
+          "/pos-drafts/" + identity.id,
+          { version: identity.version, status, data },
+          "PUT",
+        );
+        identity.version = saved.version;
+        if (mounted.current) setDraftStatus("Saved to store database");
+        localStorage.setItem(
+          storageKey,
+          JSON.stringify({
+            id: identity.id,
+            version: identity.version,
+            data: latest.current,
+          }),
+        );
+        return saved;
+      });
+    saveQueue.current = task;
+    return task;
+  };
+  useEffect(() => {
+    mounted.current = true;
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || "null");
+      if (saved?.data?.lines?.length) setRecovery(saved);
+    } catch {}
+    return () => {
+      mounted.current = false;
+      if (latest.current.lines?.length) saveNow().catch(() => {});
+    };
+  }, []);
+  useEffect(() => {
+    if (!cart.length || recovery || submitted) return;
+    const data = latest.current;
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({ ...draft.current, data }),
+    );
+    setDraftStatus("Saving…");
+    const timer = setTimeout(
+      () =>
+        saveNow("ACTIVE", data).catch((e: any) => {
+          setDraftStatus(
+            "Recovery copy saved on this computer; database save failed",
+          );
+          c.setError(e.message);
+        }),
+      500,
+    );
+    return () => clearTimeout(timer);
+  }, [
+    cart,
+    discount,
+    customerId,
+    payments,
+    payment,
+    tendered,
+    prescription,
+    notes,
+    recovery,
+    submitted,
+  ]);
+  const clearSale = () => {
+    setCart([]);
+    setDiscount(0);
+    setTendered(0);
+    setPrescription("");
+    setCustomerId("");
+    setPayments([]);
+    setNotes("");
+    setIssues([]);
+    draft.current = { id: crypto.randomUUID(), version: 0 };
+    localStorage.removeItem(storageKey);
+    setRecovery(null);
+    setDraftStatus("Not saved");
+    bumpDrafts((v) => v + 1);
+    changed();
+  };
+  const restore = async (id: string, useClientCopy = false) => {
+    try {
+      await saveQueue.current.catch(() => {});
+      if (useClientCopy) {
+        const local = JSON.parse(localStorage.getItem(storageKey) || "null");
+        if (local?.id === id)
+          await api(
+            "/pos-drafts/" + id,
+            { version: local.version, status: "ACTIVE", data: local.data },
+            "PUT",
+          );
+      }
+      const r = await api("/pos-drafts/" + id + "/resume", {});
+      draft.current = { id: r.id, version: r.version };
+      const data = r.data;
+      const mapped = [];
+      for (const l of data.lines) {
+        const m =
+          r.products.find((m: Row) => m.id === l.medicineId) ||
+          c.medicines.find((m: Row) => m.id === l.medicineId);
+        mapped.push({
+          ...l,
+          snapshotBatchIds: m?.snapshotBatchIds || l.snapshotBatchIds || [],
+          medicine: m || {
+            id: l.medicineId,
+            name: "Unavailable product",
+            salePrice: 0,
+            unitsPerStrip: 1,
+            stripsPerBox: 1,
+            looseAllowed: true,
+          },
+        });
+      }
+      setCart(mapped);
+      setDiscount(Number(data.discount));
+      setCustomerId(data.customerId || "");
+      setPayments(data.payments || []);
+      setPayment(data.payment || "CASH");
+      setTendered(Number(data.tendered || 0));
+      setPrescription(data.prescriptionReference || "");
+      setNotes(data.notes || "");
+      setIssues(r.issues);
+      setRecovery(null);
+      setSubmitted(false);
+      setKey(crypto.randomUUID());
+      bumpDrafts((v) => v + 1);
+    } catch (e: any) {
+      c.setError(e.message);
+    }
+  };
   const input = useRef<HTMLInputElement>(null),
     submitRef = useRef<() => void>(() => {});
   const receiptRef = useRef<Row | null>(null);
@@ -92,18 +263,11 @@ export default function POS(c: any) {
     return () => window.removeEventListener("keydown", handler);
   }, []);
   const searched = useMedicineSearch(q, c.version, c.medicines, c.setError);
-  const results = searched.filter(
-    (m: Row) =>
-      m.active &&
-      [m.name, m.generic, m.barcode].some((v) =>
-        String(v || "")
-          .toLowerCase()
-          .includes(q.toLowerCase()),
-      ),
-  );
+  const results = searched.filter((m: Row) => m.active);
   const changed = () => {
     setKey(crypto.randomUUID());
     setSubmitted(false);
+    setIssues([]);
   };
   const add = (m: Row) => {
     if (submitted) {
@@ -124,27 +288,24 @@ export default function POS(c: any) {
           )
         : [
             ...previous,
-            { medicineId: m.id, medicine: m, unit, quantity: 1, discount: 0 },
+            {
+              medicineId: m.id,
+              medicine: m,
+              unit,
+              quantity: 1,
+              discount: 0,
+              expectedPrice: unitPrice(m, unit),
+              serialNumbers: [],
+              snapshotBatchIds: m.snapshotBatchIds || [],
+            },
           ];
     });
     changed();
     setQ("");
     input.current?.focus();
   };
-  const factor = (l: Row) =>
-    l.unit === "box"
-      ? l.medicine.unitsPerStrip * l.medicine.stripsPerBox
-      : l.unit === "strip"
-        ? l.medicine.unitsPerStrip
-        : 1;
-  const price = (l: Row) =>
-    Number(
-      l.unit === "box"
-        ? (l.medicine.boxPrice ?? Number(l.medicine.salePrice) * factor(l))
-        : l.unit === "strip"
-          ? (l.medicine.stripPrice ?? Number(l.medicine.salePrice) * factor(l))
-          : l.medicine.salePrice,
-    );
+  const factor = (l: Row) => unitFactor(l.medicine, l.unit);
+  const price = (l: Row) => unitPrice(l.medicine, l.unit);
   const subtotal = cart
       .reduce(
         (s, l) =>
@@ -157,36 +318,140 @@ export default function POS(c: any) {
         new Decimal(0),
       )
       .toNumber(),
-    total = new Decimal(subtotal).minus(discount || 0).toNumber();
+    total = new Decimal(subtotal)
+      .minus(discount || 0)
+      .mul(new Decimal(1).plus(Number(c.settings.taxRate || 0) / 100))
+      .toDecimalPlaces(2)
+      .toNumber();
   const complete = () => {
     if (c.busy || !cart.length) return;
     setSubmitted(true);
-    c.run(
-      () =>
-        api("/sales", {
-          key,
-          lines: cart.map(({ medicine, ...l }) => l),
-          discount,
-          payment,
-          tendered,
-          prescriptionReference: prescription,
-        }),
-      "Sale completed. Stock updated.",
-    )
+    c.run(async () => {
+      const saved =
+        submitted && draft.current.version > 0
+          ? draft.current
+          : await saveNow();
+      return api("/sales", {
+        key,
+        draftId: saved.id,
+        draftVersion: saved.version,
+        customerId: customerId || null,
+        notes,
+        ...(payments.length ? { payments } : {}),
+        lines: cart.map(({ medicine, ...l }) => l),
+        discount,
+        payment,
+        tendered,
+        prescriptionReference: prescription,
+      });
+    }, "Sale completed. Stock updated.")
       .then((r: Row) => {
-        setCart([]);
-        setDiscount(0);
-        setTendered(0);
-        setPrescription("");
-        changed();
+        clearSale();
         setReceipt(r);
         input.current?.focus();
       })
-      .catch(() => {});
+      .catch((e: any) => {
+        setIssues(e.issues || []);
+      });
   };
   submitRef.current = complete;
   return (
     <>
+      {recovery && (
+        <section className="card">
+          <h3>Recover previous cart</h3>
+          <p>
+            Your last cart has {recovery.data.lines.length} items. Resume it to
+            check current stock and prices.
+          </p>
+          <Button onClick={() => restore(recovery.id, true)}>
+            Resume Draft
+          </Button>
+          <Button
+            secondary
+            onClick={async () => {
+              try {
+                const current = held.find((d: Row) => d.id === recovery.id);
+                if (current)
+                  await api("/pos-drafts/" + current.id + "/discard", {
+                    version: current.version,
+                  });
+                clearSale();
+              } catch (e: any) {
+                c.setError(e.message);
+              }
+            }}
+          >
+            Discard Draft
+          </Button>
+          <Button
+            secondary
+            onClick={() => {
+              setRecovery(null);
+              localStorage.removeItem(storageKey);
+            }}
+          >
+            Start New Sale
+          </Button>
+        </section>
+      )}
+      <details className="card">
+        <summary>Held sales & saved drafts ({held.length})</summary>
+        <Table
+          rows={held}
+          columns={[
+            { label: "Draft", render: (r) => "D-" + r.number },
+            {
+              label: "Customer / cashier",
+              render: (r) => r.customerName + " · " + r.cashierName,
+            },
+            { label: "Items", render: (r) => r.itemCount },
+            {
+              label: "Total before tax",
+              render: (r) =>
+                pk(
+                  (r.data.lines || []).reduce(
+                    (s: number, l: Row) =>
+                      s +
+                      Number(l.expectedPrice || 0) * l.quantity -
+                      Number(l.discount || 0),
+                    0,
+                  ) - Number(r.data.discount || 0),
+                ),
+            },
+            {
+              label: "Created / Updated",
+              render: (r) => fmt(r.createdAt) + " / " + fmt(r.updatedAt),
+            },
+            {
+              label: "Actions",
+              render: (r) => (
+                <>
+                  <button
+                    disabled={cart.length > 0}
+                    onClick={() => restore(r.id)}
+                  >
+                    Resume Sale
+                  </button>
+                  <button
+                    onClick={() =>
+                      c
+                        .run(() =>
+                          api("/pos-drafts/" + r.id + "/discard", {
+                            version: r.version,
+                          }),
+                        )
+                        .catch(() => {})
+                    }
+                  >
+                    Discard
+                  </button>
+                </>
+              ),
+            },
+          ]}
+        />
+      </details>
       <div className="tab-bar">
         {["Counter", "Sales history"].map((t) => (
           <button
@@ -303,7 +568,13 @@ export default function POS(c: any) {
                 <Empty text="Scan or select a medicine to start billing." />
               )}
               {cart.map((l, i) => (
-                <div className="cart-line" key={i}>
+                <div
+                  className={
+                    "cart-line " +
+                    (issues.some((x) => x.index === i) ? "error" : "")
+                  }
+                  key={i}
+                >
                   <div>
                     <b>{l.medicine.name}</b>
                     <button
@@ -318,14 +589,83 @@ export default function POS(c: any) {
                     </button>
                   </div>
                   <small>
-                    {l.medicine.strength} · {pk(price(l))} / {l.unit}
+                    {l.medicine.strength} · {pk(price(l))} /{" "}
+                    {unitsFor(l.medicine).find((u) => u.value === l.unit)
+                      ?.label || l.unit}
                   </small>
+                  {issues
+                    .filter((x) => x.index === i)
+                    .map((x, n) => (
+                      <p role="alert" key={n}>
+                        {x.message}
+                        {x.code === "PRICE" && (
+                          <button
+                            onClick={() => {
+                              setCart(
+                                cart.map((v, j) =>
+                                  j === i
+                                    ? {
+                                        ...v,
+                                        expectedPrice: x.currentPrice,
+                                        acceptPriceChange: true,
+                                      }
+                                    : v,
+                                ),
+                              );
+                              changed();
+                            }}
+                          >
+                            Accept current price
+                          </button>
+                        )}
+                      </p>
+                    ))}
+                  {l.medicine.mrp &&
+                  price(l) > Number(l.medicine.mrp) * factor(l) ? (
+                    <p className="notice">
+                      {l.medicine.name}: Selling price {pk(price(l))} exceeds
+                      MRP {pk(Number(l.medicine.mrp) * factor(l))}. Review
+                      applicable price rules.
+                    </p>
+                  ) : null}
+                  {l.medicine.serialTracked && (
+                    <Field
+                      label={
+                        "Serial numbers for " +
+                        l.medicine.name +
+                        " (comma separated)"
+                      }
+                      value={(l.serialNumbers || []).join(", ")}
+                      set={(v: string) => {
+                        setCart(
+                          cart.map((x, n) =>
+                            n === i
+                              ? {
+                                  ...x,
+                                  serialNumbers: v
+                                    .split(",")
+                                    .map((x) => x.trim())
+                                    .filter(Boolean),
+                                }
+                              : x,
+                          ),
+                        );
+                        changed();
+                      }}
+                    />
+                  )}
+                  {c.user.role !== "CASHIER" &&
+                    issues.some((x) => x.index === i) && (
+                      <button onClick={() => c.setPage("Medicines")}>
+                        Open Product Master to correct
+                      </button>
+                    )}
                   <div className="quantity-row">
                     <input
                       aria-label={"Quantity for " + l.medicine.name}
                       type="number"
-                      min="1"
-                      step="1"
+                      min="0.000001"
+                      step={l.medicine.fractionalAllowed ? "any" : "1"}
                       value={l.quantity}
                       disabled={submitted}
                       onChange={(e) => {
@@ -346,18 +686,25 @@ export default function POS(c: any) {
                       onChange={(e) => {
                         setCart(
                           cart.map((v, n) =>
-                            n === i ? { ...v, unit: e.target.value } : v,
+                            n === i
+                              ? {
+                                  ...v,
+                                  unit: e.target.value,
+                                  expectedPrice: unitPrice(
+                                    v.medicine,
+                                    e.target.value,
+                                  ),
+                                  acceptPriceChange: false,
+                                }
+                              : v,
                           ),
                         );
                         changed();
                       }}
                     >
-                      {(l.medicine.looseAllowed
-                        ? ["base", "strip", "box"]
-                        : ["strip", "box"]
-                      ).map((u) => (
-                        <option key={u} value={u}>
-                          {u === "base" ? l.medicine.baseUnit : u}
+                      {unitsFor(l.medicine).map((u) => (
+                        <option key={u.value} value={u.value}>
+                          {u.label}
                         </option>
                       ))}
                     </select>
@@ -393,6 +740,109 @@ export default function POS(c: any) {
               ))}
             </div>
             <div className="cart-summary">
+              <small>{draftStatus}</small>
+              <fieldset
+                disabled={submitted || c.busy}
+                style={{ border: 0, padding: 0, minWidth: 0 }}
+              >
+                <Field
+                  label="Search customers for sale"
+                  value={customerSearch}
+                  set={setCustomerSearch}
+                />
+                <Field
+                  label="Customer"
+                  value={customerId}
+                  set={(v: string) => {
+                    setCustomerId(v);
+                    changed();
+                  }}
+                  options={[
+                    { value: "", label: "Walk-in customer" },
+                    ...customers.map((r: Row) => ({
+                      value: r.id,
+                      label:
+                        r.name +
+                        " · Due " +
+                        pk(r.outstanding) +
+                        " · Available " +
+                        (r.availableCredit === null
+                          ? "unlimited"
+                          : pk(r.availableCredit)),
+                    })),
+                  ]}
+                />
+                <button onClick={() => setQuickCustomer(true)}>
+                  + Quick customer
+                </button>
+                <Field
+                  label="Sale notes"
+                  value={notes}
+                  set={(v: string) => {
+                    setNotes(v);
+                    changed();
+                  }}
+                />
+                {payments.map((p, i) => (
+                  <div className="card" key={i}>
+                    <PaymentFields
+                      checkout
+                      p={p}
+                      banks={banks}
+                      set={(v: Row) => {
+                        setPayments(payments.map((x, n) => (n === i ? v : x)));
+                        changed();
+                      }}
+                    />
+                    <button
+                      disabled={submitted}
+                      onClick={() => {
+                        setPayments(payments.filter((_, n) => n !== i));
+                        changed();
+                      }}
+                    >
+                      Remove payment
+                    </button>
+                  </div>
+                ))}
+                <Button
+                  secondary
+                  disabled={submitted}
+                  onClick={() => {
+                    setPayments([
+                      ...payments,
+                      {
+                        method: "CASH",
+                        amount: String(
+                          Math.max(
+                            0,
+                            total -
+                              payments.reduce(
+                                (s, p) => s + Number(p.amount),
+                                0,
+                              ),
+                          ),
+                        ),
+                        reference: "",
+                        paymentDate: day(),
+                        cardLastFour: "",
+                        terminal: "",
+                        remarks: "",
+                      },
+                    ]);
+                    changed();
+                  }}
+                >
+                  Add split payment
+                </Button>
+                {payments.length > 0 && (
+                  <p>
+                    Allocated{" "}
+                    {pk(payments.reduce((s, p) => s + Number(p.amount), 0))} /{" "}
+                    {pk(total)}. Edit amounts to match the total.
+                  </p>
+                )}
+              </fieldset>
               <div>
                 <span>Subtotal</span>
                 <b>{pk(subtotal)}</b>
@@ -424,17 +874,26 @@ export default function POS(c: any) {
                 <span>Total payable</span>
                 <strong>{pk(total)}</strong>
               </div>
-              <Field
-                label="Payment method"
-                value={payment}
-                disabled={submitted}
-                set={(v: any) => {
-                  setPayment(v);
-                  changed();
-                }}
-                options={["CASH", "CARD", "RAAST", "OTHER"]}
-              />
-              {payment === "CASH" && (
+              {!payments.length && (
+                <Field
+                  label="Payment method"
+                  value={payment}
+                  disabled={submitted}
+                  set={(v: any) => {
+                    setPayment(v);
+                    changed();
+                  }}
+                  options={[
+                    "CASH",
+                    "CARD",
+                    "CREDIT",
+                    "ADVANCE",
+                    "RAAST",
+                    "OTHER",
+                  ]}
+                />
+              )}
+              {!payments.length && payment === "CASH" && (
                 <>
                   <Field
                     label="Cash received PKR"
@@ -453,6 +912,17 @@ export default function POS(c: any) {
                   </div>
                 </>
               )}
+              <Button
+                secondary
+                disabled={c.busy || !cart.length || submitted}
+                onClick={() =>
+                  saveNow("HELD")
+                    .then(() => clearSale())
+                    .catch((e: any) => c.setError(e.message))
+                }
+              >
+                Hold Sale / Start New Sale
+              </Button>
               <Button disabled={c.busy || !cart.length} onClick={complete}>
                 <Check size={18} />
                 {submitted ? "Retry same sale" : "Complete sale"}
@@ -475,7 +945,16 @@ export default function POS(c: any) {
                           : "Cancel this unposted cart?",
                       )
                     ) {
-                      if (!submitted) setCart([]);
+                      if (!submitted) {
+                        saveNow()
+                          .then((d) =>
+                            api("/pos-drafts/" + d.id + "/discard", {
+                              version: d.version,
+                            }),
+                          )
+                          .then(clearSale)
+                          .catch((e: any) => c.setError(e.message));
+                      }
                       changed();
                     }
                   }}
@@ -542,6 +1021,14 @@ export default function POS(c: any) {
           />
         </section>
       )}
+      {quickCustomer && (
+        <CustomerForm
+          c={c}
+          customer={{}}
+          close={() => setQuickCustomer(false)}
+          onSaved={(r: Row) => setCustomerId(r.id)}
+        />
+      )}
       {receipt && (
         <Modal
           title={"Sale MS-" + receipt.number}
@@ -562,7 +1049,10 @@ export default function POS(c: any) {
               rows={receipt.lines}
               columns={[
                 { label: "Medicine", render: (r) => r.name },
-                { label: "Quantity", render: (r) => r.quantity + " " + r.unit },
+                {
+                  label: "Quantity",
+                  render: (r) => r.quantity + " " + (r.unitLabel || r.unit),
+                },
                 { label: "Total", render: (r) => pk(r.net) },
                 {
                   label: "Batch allocations",
@@ -599,6 +1089,17 @@ export default function POS(c: any) {
               <Printer size={17} />
               Open receipt / PDF
             </a>
+            {["58", "80", "A4"].map((f) => (
+              <a
+                key={f}
+                className="button secondary"
+                target="_blank"
+                rel="noreferrer"
+                href={"/api/sales/" + receipt.id + "/receipt?format=" + f}
+              >
+                {f === "A4" ? "A4 Invoice" : f + "mm Receipt"}
+              </a>
+            ))}
             <Button secondary onClick={() => setReceipt(null)}>
               Done
             </Button>

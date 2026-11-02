@@ -47,6 +47,7 @@ import {
   ErrorContext,
   useBusinessDate,
 } from "./shared";
+import Customers from "./screens/Customers";
 import Dashboard from "./screens/Dashboard";
 import Medicines from "./screens/Medicines";
 import Purchases from "./screens/Purchases";
@@ -61,6 +62,7 @@ const nav = [
   ["POS / Sales", ScanLine],
   ["Inventory", Package],
   ["Reports", BarChart3],
+  ["Customers", Wallet],
   ["Settings", Settings],
 ] as const;
 function App() {
@@ -159,7 +161,7 @@ function App() {
     );
   const allowed =
     user.role === "CASHIER"
-      ? ["Medicines", "POS / Sales"]
+      ? ["Medicines", "POS / Sales", "Customers"]
       : nav.map((n) => n[0]);
   return (
     <ErrorContext.Provider value={error}>
@@ -315,6 +317,7 @@ function App() {
             {page === "POS / Sales" && <POS {...ctx} />}{" "}
             {page === "Inventory" && <Inventory {...ctx} />}{" "}
             {page === "Reports" && <Reports {...ctx} />}{" "}
+            {page === "Customers" && <Customers {...ctx} />}
             {page === "Settings" && <StoreSettings {...ctx} />}
             <footer>
               <span>

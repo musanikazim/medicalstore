@@ -77,7 +77,31 @@ export default function Dashboard(c: any) {
           ["Today's sales", pk(s.sales), Wallet, "teal"],
           ["Today's gross profit", pk(s.profit), BarChart3, "blue"],
           ["Today's purchases", pk(s.purchases), ShoppingBag, "violet"],
-          ["Sellable stock value", pk(s.sellableValue), Package, "amber"],
+          [
+            "Current Inventory Value (Purchase Cost)",
+            pk(s.stockValue),
+            Package,
+            "amber",
+          ],
+          [
+            "Current Inventory Value (Selling Price)",
+            pk(s.inventorySellingValue),
+            Package,
+            "teal",
+          ],
+          [
+            "Total Customer Outstanding",
+            pk(s.customerOutstanding),
+            Wallet,
+            "amber",
+          ],
+          ["Today's Credit Sales", pk(s.todayCreditSales), Wallet, "violet"],
+          [
+            "Today's Customer Collections",
+            pk(s.todayCustomerCollections),
+            Wallet,
+            "blue",
+          ],
         ].map(([label, value, Icon, tone]: any) => (
           <div className="stat" key={label}>
             <div>
@@ -88,8 +112,8 @@ export default function Dashboard(c: any) {
             </div>
             <strong>{value}</strong>
             <small>
-              {label === "Sellable stock value"
-                ? "Actual batch acquisition cost"
+              {String(label).startsWith("Current Inventory")
+                ? "Current inventory · selling value uses available stock"
                 : "Posted transactions · today"}
             </small>
           </div>
