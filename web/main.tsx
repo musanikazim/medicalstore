@@ -1,3 +1,7 @@
+import StoreOnboarding from "./components/onboarding";
+import Suppliers from "./screens/Suppliers";
+import Reorder from "./screens/Reorder";
+import DataImport from "./screens/DataImport";
 import React, { useState, useEffect, useRef, FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -63,6 +67,9 @@ const nav = [
   ["Inventory", Package],
   ["Reports", BarChart3],
   ["Customers", Wallet],
+  ["Suppliers", ShoppingBag],
+  ["Stock Reorder", Package],
+  ["Data Import & Migration", FileText],
   ["Settings", Settings],
 ] as const;
 function App() {
@@ -162,7 +169,11 @@ function App() {
   const allowed =
     user.role === "CASHIER"
       ? ["Medicines", "POS / Sales", "Customers"]
-      : nav.map((n) => n[0]);
+      : nav
+          .map((n) => n[0])
+          .filter(
+            (n) => n !== "Data Import & Migration" || user.role === "ADMIN",
+          );
   return (
     <ErrorContext.Provider value={error}>
       <div className={"app " + (collapsed ? "collapsed" : "")}>
@@ -189,7 +200,7 @@ function App() {
             )}
           </div>
           <p className="nav-label">WORKSPACE</p>
-          <nav>
+          <nav aria-label="Workspace navigation">
             {nav
               .filter(([n]) => allowed.includes(n))
               .map(([n, Icon]) => (
@@ -309,7 +320,15 @@ function App() {
               </div>
             )}
             {busy && <div className="busy-line" />}
-            {page === "Dashboard" && <Dashboard {...ctx} />}{" "}
+            {page === "Dashboard" && (
+              <>
+                {user.role === "ADMIN" &&
+                  settings.onboardingComplete === false && (
+                    <StoreOnboarding {...ctx} />
+                  )}
+                <Dashboard {...ctx} />
+              </>
+            )}{" "}
             {page === "Medicines" && (
               <Medicines {...ctx} search={search} setSearch={setSearch} />
             )}{" "}
@@ -318,6 +337,11 @@ function App() {
             {page === "Inventory" && <Inventory {...ctx} />}{" "}
             {page === "Reports" && <Reports {...ctx} />}{" "}
             {page === "Customers" && <Customers {...ctx} />}
+            {page === "Suppliers" && <Suppliers {...ctx} />}
+            {page === "Stock Reorder" && <Reorder {...ctx} />}
+            {page === "Data Import & Migration" && user.role === "ADMIN" && (
+              <DataImport {...ctx} />
+            )}
             {page === "Settings" && <StoreSettings {...ctx} />}
             <footer>
               <span>

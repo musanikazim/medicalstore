@@ -1,3 +1,9 @@
+import {
+  CustomerStatement,
+  ReminderButton,
+  PrintLink,
+} from "../components/business";
+import { businessReference, ledgerLabels } from "../../shared/business";
 import React, { useState } from "react";
 import {
   api,
@@ -49,17 +55,22 @@ export function CustomerForm({ c, customer, close, onSaved }: any) {
         }}
       >
         <div className="form-grid">
-          {["name", "mobile", "alternateMobile", "address", "notes"].map(
-            (k) => (
-              <Field
-                key={k}
-                label={k}
-                required={k === "name"}
-                value={p[k]}
-                set={(v: string) => set({ ...p, [k]: v })}
-              />
-            ),
-          )}
+          {[
+            "name",
+            "mobile",
+            "alternateMobile",
+            "email",
+            "address",
+            "notes",
+          ].map((k) => (
+            <Field
+              key={k}
+              label={k}
+              required={k === "name"}
+              value={p[k]}
+              set={(v: string) => set({ ...p, [k]: v })}
+            />
+          ))}
           <MasterSelect
             c={c}
             kind="CUSTOMER_TYPE"
@@ -153,6 +164,10 @@ export default function Customers(c: any) {
             { label: "Customer", render: (r) => r.code + " · " + r.name },
             { label: "Mobile", render: (r) => r.mobile },
             {
+              label: "Reminder",
+              render: (r) => <ReminderButton c={c} customer={r} />,
+            },
+            {
               label: "Credit",
               render: (r) => (r.creditEnabled ? "Enabled" : "Disabled"),
             },
@@ -243,13 +258,29 @@ export default function Customers(c: any) {
                         reference: crypto.randomUUID(),
                         reason,
                       }),
-                    ).catch(() => {});
+                    )
+                      .then((note: Row) =>
+                        window.open(
+                          "/api/business-documents/credit-note/" + note.id,
+                          "_blank",
+                          "noopener",
+                        ),
+                      )
+                      .catch(() => {});
                 }}
               >
                 Credit note
               </Button>
             )}
           </div>
+          <ReminderButton
+            c={c}
+            customer={{
+              ...detail.customer,
+              outstanding: detail.outstanding,
+              netBalance: detail.netBalance,
+            }}
+          />
           <h3>Invoices and settlement</h3>
           <Table
             rows={detail.accounts}
@@ -266,22 +297,32 @@ export default function Customers(c: any) {
               { label: "Status", render: (r) => r.status },
             ]}
           />
-          <h3>Statement</h3>
-          <Table
-            rows={detail.ledger}
-            columns={[
-              { label: "Date", render: (r) => fmt(r.createdAt) },
-              { label: "Type", render: (r) => r.type },
-              { label: "Reference", render: (r) => r.reference },
-              { label: "Debit", render: (r) => pk(r.debit) },
-              { label: "Credit", render: (r) => pk(r.credit) },
-              { label: "Balance", render: (r) => pk(r.balance) },
-              {
-                label: "Remarks / entered by",
-                render: (r) => r.remarks + " · " + r.createdBy,
-              },
-            ]}
-          />
+          <CustomerStatement c={c} id={id} />
+          <details>
+            <summary>Ledger posting audit</summary>
+            <Table
+              rows={detail.ledger}
+              columns={[
+                { label: "Date", render: (r) => fmt(r.createdAt) },
+                {
+                  label: "Type",
+                  render: (r) =>
+                    ledgerLabels[r.type] || r.type.replaceAll("_", " "),
+                },
+                {
+                  label: "Reference",
+                  render: (r) => businessReference(r.reference),
+                },
+                { label: "Debit", render: (r) => pk(r.debit) },
+                { label: "Credit", render: (r) => pk(r.credit) },
+                { label: "Balance", render: (r) => pk(r.balance) },
+                {
+                  label: "Remarks",
+                  render: (r) => businessReference(r.remarks),
+                },
+              ]}
+            />
+          </details>
           <h3>Payment history</h3>
           <Table
             rows={detail.collections}
@@ -317,13 +358,24 @@ export default function Customers(c: any) {
                         Reverse
                       </button>
                     )}
-                    {r.reversal && "Reversed"}
+                    <PrintLink
+                      path={
+                        "/business-documents/" +
+                        (r.reversal ? "reversal" : "payment") +
+                        "/" +
+                        r.id
+                      }
+                      label={
+                        r.reversal ? "Reversal document" : "Preview receipt"
+                      }
+                      defaultPaper={c.settings.printFormat}
+                    />
                   </>
                 ),
               },
             ]}
           />
-          <h3>Purchase history</h3>
+          <h3>Sales history</h3>
           <Table
             rows={detail.sales}
             columns={[

@@ -1,3 +1,5 @@
+import { PrintLink, ReminderButton } from "../components/business";
+import { businessReference } from "../../shared/business";
 import React, { useState } from "react";
 import { Field, Table, useData, day, Row } from "../shared";
 import { exportSheet } from "../spreadsheets";
@@ -57,12 +59,44 @@ export default function CreditReports(c: any) {
           Print / PDF
         </a>
       </div>
+      <PrintLink
+        path={"/credit-reports?" + query + "&format=pdf"}
+        defaultPaper={c.settings.printFormat}
+      />
       <p>{report?.note}</p>
+      {kind === "outstanding" && (
+        <Table
+          rows={customers.filter(
+            (r: Row) =>
+              Number(r.outstanding) > 0 && (!customerId || r.id === customerId),
+          )}
+          columns={[
+            { label: "Customer", render: (r) => r.name },
+            {
+              label: "Reminder",
+              render: (r) => <ReminderButton c={c} customer={r} />,
+            },
+          ]}
+        />
+      )}
       <Table
         rows={report?.rows || []}
         columns={Object.keys(report?.rows?.[0] || {})
-          .filter((k) => k !== "customerId")
-          .map((k) => ({ label: k, render: (r) => r[k] }))}
+          .filter(
+            (k) =>
+              ![
+                "customerId",
+                "id",
+                "createdBy",
+                "saleId",
+                "collectionId",
+              ].includes(k),
+          )
+          .map((k) => ({
+            label: k,
+            render: (r) =>
+              typeof r[k] === "string" ? businessReference(r[k]) : r[k],
+          }))}
       />
     </details>
   );

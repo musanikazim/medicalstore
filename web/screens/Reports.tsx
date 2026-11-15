@@ -1,3 +1,4 @@
+import { PrintLink } from "../components/business";
 import CreditReports from "./CreditReports";
 import React, { useState, useEffect, useRef } from "react";
 import Decimal from "decimal.js";
@@ -125,6 +126,19 @@ export default function Reports(c: any) {
           { label: "Type", render: (r) => r.type },
           { label: "Quantity", render: (r) => r.quantity },
           { label: "Reason", render: (r) => r.reason },
+          ...(kind === "adjustments"
+            ? [
+                {
+                  label: "Document",
+                  render: (r: Row) => (
+                    <PrintLink
+                      path={"/business-documents/adjustment/" + r.id}
+                      defaultPaper={c.settings.printFormat}
+                    />
+                  ),
+                },
+              ]
+            : []),
         ]
       : [
             "medicineSales",
@@ -158,6 +172,15 @@ export default function Reports(c: any) {
               { label: "Quantity", render: (r) => r.quantity },
               { label: "Amount", render: (r) => pk(r.amount) },
               { label: "Reason", render: (r) => r.reason },
+              {
+                label: "Document",
+                render: (r) => (
+                  <PrintLink
+                    path={"/business-documents/return/" + r.id}
+                    defaultPaper={c.settings.printFormat}
+                  />
+                ),
+              },
             ]
           : [
               { label: "Invoice", render: (r) => <b>#{r.number}</b> },
@@ -255,10 +278,10 @@ export default function Reports(c: any) {
               · Amounts in PKR
             </p>
           </div>
-          <Button secondary onClick={() => window.print()}>
-            <Printer size={16} />
-            Print
-          </Button>
+          <PrintLink
+            path={`/reports/export?from=${from}&to=${to}&kind=${kind}&format=pdf&medicineId=${medicine}&supplierId=${supplier}`}
+            defaultPaper={c.settings.printFormat}
+          />
         </div>
         <Table rows={selected} columns={columns} />
         {kind === "profit" && (

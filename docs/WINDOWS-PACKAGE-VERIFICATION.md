@@ -1,5 +1,7 @@
 # Windows package verification
 
+For release 1.1.0, use [VERIFICATION-1.1.0.md](VERIFICATION-1.1.0.md). The notes below are retained as the previous release's historical verification record.
+
 Verified in the Codex environment on 2 November 2026 (Asia/Karachi):
 
 - Docker image builds from a clean dependency install using package-lock.json.

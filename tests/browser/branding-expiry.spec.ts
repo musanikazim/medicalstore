@@ -5,6 +5,7 @@ import {
   type APIRequestContext,
 } from "@playwright/test";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
 import { businessDate } from "../../shared/expiry";
 const guard = { "X-Requested-With": "MedicalStore" };
@@ -95,7 +96,7 @@ test("branding updates immediately, survives logout/login/reload, prints name/lo
     await page
       .getByLabel("Store logo (PNG/JPEG, up to 200 KB)")
       .setInputFiles(
-        new URL("../fixtures/store-logo.png", import.meta.url).pathname,
+        fileURLToPath(new URL("../fixtures/store-logo.png", import.meta.url)),
       );
     await page
       .getByRole("button", { name: "Save settings", exact: true })

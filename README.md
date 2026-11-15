@@ -1,5 +1,7 @@
 # Sehat — Medical Store POS & Inventory
 
+**Latest complete release: 1.1.0 (3 November 2026).** Start with [release notes and installation/update/reset instructions](docs/RELEASE-1.1.0.md), [the import guide](docs/DATA-IMPORT.md), [verification results](docs/VERIFICATION-1.1.0.md) and [modified files](docs/MODIFIED-FILES-1.1.0.md). The offline Excel templates are in `docs/import-templates`. Earlier verification notes below describe previous releases; the versioned verification guide records this release's actual checks.
+
 A database-backed single-store application for Pakistani pharmacies. React/TypeScript + Tailwind, shadcn-style Radix button primitives and Lucide; NestJS REST host; Prisma with the PostgreSQL driver adapter; PostgreSQL 16. Monetary operations use Decimal, persisted as NUMERIC. Currency is PKR; business dates use Asia/Karachi.
 
 See [architecture and business rules](docs/ARCHITECTURE.md), [API](docs/API.md), and [deployment and recovery](docs/DEPLOYMENT.md).
@@ -15,6 +17,8 @@ The Compose configuration now runs **app + PostgreSQL + scheduled backups**. It 
 ## Start locally
 
 Requires Node 24, npm, PostgreSQL 16 (with pg_trgm), and optionally Docker.
+
+For an existing installation, preserve the original `.env` and customer database. Use a separate database for source development and a dedicated `_test` database for tests. Do not repeat fresh setup over a customer store.
 
 1. `cp .env.example .env`; set DATABASE_URL and a random JWT_SECRET of at least 32 characters.
 2. For native development without the Windows helper, use a separately installed PostgreSQL database and put its connection URL in DATABASE_URL. The supplied Compose database is intentionally not published to the host; the Compose app reaches it internally. Do not expose it merely to run the native development workflow.

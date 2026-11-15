@@ -83,6 +83,7 @@ export async function ledger(
   saleId?: string,
   collectionId?: string,
   remarks = "",
+  effectiveDate?: Date,
 ) {
   if (D(debit).isZero() && D(credit).isZero()) return;
   await t.customerLedger.create({
@@ -96,6 +97,7 @@ export async function ledger(
       collectionId,
       remarks,
       createdBy: a.id,
+      ...(effectiveDate ? { createdAt: effectiveDate } : {}),
     },
   });
 }
@@ -140,6 +142,7 @@ export async function saveCustomer(a: Actor, input: unknown, id?: string) {
       name: text,
       mobile: z.string().max(40).default(""),
       alternateMobile: z.string().max(40).default(""),
+      email: z.string().max(250).default(""),
       address: z.string().max(1000).default(""),
       typeId: z.string().nullable().optional(),
       creditEnabled: z.boolean().default(false),

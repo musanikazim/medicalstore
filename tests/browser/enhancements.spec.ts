@@ -204,7 +204,7 @@ test("customer creation, credit approval, split sale and partial collection in b
   await page.getByRole("button", { name: "Done", exact: true }).click();
   await page.getByRole("button", { name: "Customers", exact: true }).click();
   await page.getByLabel("Search customers", { exact: true }).fill(name);
-  await page.getByRole("row").filter({ hasText: name }).click();
+  await page.getByRole("cell").filter({ hasText: name }).first().click();
   await expect(
     page.getByRole("heading", { name: name + " · Khata / Credit Ledger" }),
   ).toBeVisible();

@@ -153,6 +153,50 @@ export default function StoreSettings(c: any) {
                 </button>
               </div>
             )}
+            <h3>Statement printing & WhatsApp reminders</h3>
+            <div className="form-grid">
+              <Field
+                label="Default statement format"
+                value={form.statementPrintFormat || "A4"}
+                options={["A4", "80", "58"]}
+                set={(v: string) =>
+                  setForm({ ...form, statementPrintFormat: v })
+                }
+              />
+              {[
+                [
+                  "reminderCountryCode",
+                  "Default country code (92 for Pakistan)",
+                ],
+                ["reminderContact", "Shop reminder contact"],
+              ].map(([k, l]) => (
+                <Field
+                  key={k}
+                  label={l}
+                  value={form[k] || (k === "reminderCountryCode" ? "92" : "")}
+                  set={(v: string) => setForm({ ...form, [k]: v })}
+                />
+              ))}
+              {[
+                ["reminderEnglish", "English reminder template"],
+                ["reminderRomanUrdu", "Roman Urdu reminder template"],
+              ].map(([k, l]) => (
+                <label className="field" key={k}>
+                  {l}
+                  <textarea
+                    rows={6}
+                    value={form[k] || ""}
+                    placeholder="Blank uses the standard template"
+                    onChange={(e) => setForm({ ...form, [k]: e.target.value })}
+                  />
+                </label>
+              ))}
+            </div>
+            <p>
+              Template placeholders:{" "}
+              {"{customer}, {store}, {balance}, {contact}"}. WhatsApp uses the
+              account signed in on your device; the owner sends manually.
+            </p>
             <h3>Invoice & Printing</h3>
             <div className="form-grid">
               <Field

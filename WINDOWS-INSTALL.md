@@ -1,5 +1,7 @@
 # Sehat on Windows 11 — start here
 
+Latest package: **Sehat-MedicalStore-1.1.0-Complete.zip**. See [the complete release guide](docs/RELEASE-1.1.0.md) for onboarding, import templates, safe update/reset instructions and the supported direct upgrade path. Fresh setup now refuses an existing `.env`, Sehat container or Sehat database volume and directs you to Update-Sehat.
+
 **Already installed at `F:\Sehat-MedicalStore`? Use [docs/UPDATE-WINDOWS.md](docs/UPDATE-WINDOWS.md), not first-time setup.**
 
 This package contains the complete project source. It does not contain the Codex database, administrator account, passwords, or private settings. Your Windows installation starts with its own database and new credentials. Nothing is uploaded or publicly deployed.
@@ -33,7 +35,7 @@ Double-click **`Setup-Windows.cmd`**. It will:
 
 Go to **http://localhost:3001** and sign in with the email/password **you chose**. Save them in your password manager. The administrator password is not saved in a text file. The `.env` file holds only installation secrets and must stay with this installation.
 
-If a script window says it failed, read the message before pressing a key to close it. Fix the stated issue and run setup again. Setup preserves existing data and secrets. Creating an existing account never changes its password.
+If a script window says it failed, read the message before closing it. If configuration or containers were already created, preserve `.env` and use Initialize-Database.cmd, Create-Administrator.cmd and Start-Sehat.cmd to finish an interrupted fresh installation. Setup deliberately refuses an existing installation. Creating an existing account never changes its password.
 
 ## Everyday use
 

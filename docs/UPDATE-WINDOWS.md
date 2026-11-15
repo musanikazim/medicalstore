@@ -4,15 +4,15 @@ Target installation: `F:\Sehat-MedicalStore`. This update keeps the same Docker 
 
 ## Download and extract
 
-Download the new **Sehat-MedicalStore-Complete.zip** into your Windows Downloads folder using that exact name. If your browser appends `(1)` to the name, rename the new download to `Sehat-MedicalStore-Complete.zip` first. The source ZIP does not contain your database, `.env`, passwords or backups.
+Download the new **Sehat-MedicalStore-1.1.0-Complete.zip** into your Windows Downloads folder using that exact name. If your browser appends `(1)` to the name, rename the new download to `Sehat-MedicalStore-1.1.0-Complete.zip` first. The source ZIP does not contain your database, `.env`, passwords or backups.
 
 Start Docker Desktop and wait until its Linux engine is running. Close other Sehat browser tabs before updating. Open a normal PowerShell window (administrator elevation is not required) and paste these commands:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
 $SehatProject = 'F:\Sehat-MedicalStore'
-$SehatZip = Join-Path $env:USERPROFILE 'Downloads\Sehat-MedicalStore-Complete.zip'
-$SehatStaging = 'F:\Sehat-Update-20261102'
+$SehatZip = Join-Path $env:USERPROFILE 'Downloads\Sehat-MedicalStore-1.1.0-Complete.zip'
+$SehatStaging = 'F:\Sehat-Update-1.1.0'
 
 if (-not (Test-Path -LiteralPath $SehatZip)) { throw 'Updated ZIP not found in Downloads. Check the file name.' }
 if (-not (Test-Path -LiteralPath (Join-Path $SehatProject '.env'))) { throw 'Existing .env not found. Check the installation path; do not run Setup.' }
@@ -33,11 +33,15 @@ Set-Location -LiteralPath $SehatProject
 if ($LASTEXITCODE -ne 0) { throw 'Update did not finish. Keep the error message and your backup; no volume-removal command was run.' }
 ```
 
-The updater checks that the existing database volume is present, creates a timestamped backup, builds the new image while your old app is still running, and recreates **only the app**. Startup applies the additive migration before accepting requests. The database and backup containers keep their existing volume/configuration. It then opens **http://localhost:3001**. Sign in with your **existing** account.
+The updater checks that the existing database volume is present, builds the new image while your old app is still running, pauses application writes, creates a timestamped backup, verifies archive readability and the copied SHA-256, and recreates **only the app**. Startup applies the additive migration before accepting requests. The database and backup containers keep their existing volume/configuration. It then opens **http://localhost:3001**. Sign in with your **existing** account.
 
 For a second attempt, reuse the already-extracted files and run `F:\Sehat-MedicalStore\Update-Sehat.cmd`. Do not repeat the extract block into the same staging folder; it deliberately refuses to overwrite it. If the image build fails, the old running app remains available; fix the stated issue and retry. The updater never deletes Docker volumes or business records.
 
-## Changes in this update
+## Release 1.1.0 additions
+
+See [RELEASE-1.1.0.md](RELEASE-1.1.0.md) for statements, printing, reminders, supplier management, reordering, imports and the three additive 20261103 migrations. Existing stock quantities and financial history are preserved.
+
+## Previously included changes
 
 - Sidebar and login branding use the existing store name/logo; the title is `[Store Name] POS`. Saving updates the UI immediately. The default pharmacy icon is used when no logo exists. Receipts use the same name and logo.
 - Default Minimum Stock and Cashier Discount Limit controls are hidden. Their saved values, medicine thresholds and backend discount limits remain intact.
@@ -54,4 +58,4 @@ This release also includes product types, master data, configurable units, seria
 
 Keep the `.dump` created in `F:\Sehat-MedicalStore\backups` and a separate private copy of `.env`. Never share `.env`, backups or rendered Docker configuration publicly. Do not use `docker compose down --volumes`, Docker factory reset, `/MIR`, `/PURGE` or volume deletion as part of this update.
 
-The update has been tested on Linux with PostgreSQL, browser automation and Docker; Windows/WSL and your physical hardware are not available here. PowerShell syntax and the non-destructive command sequence are checked separately. See `docs/WINDOWS-PACKAGE-VERIFICATION.md` for the exact verification performed.
+Release 1.1.0 was validated locally on Windows with isolated PostgreSQL databases, browser automation and Docker image builds. Windows setup/update/reset command flow was tested with mocked Docker commands so no customer installation was changed. Physical printer/scanner and a destructive customer-store reset were not performed. See [VERIFICATION-1.1.0.md](VERIFICATION-1.1.0.md).

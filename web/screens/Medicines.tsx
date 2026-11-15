@@ -76,6 +76,7 @@ export default function Medicines(c: any) {
     [detail, setDetail] = useState<Row | null>(null),
     [category, setCategory] = useState(""),
     [company, setCompany] = useState(""),
+    [incomplete, setIncomplete] = useState(false),
     [importRows, setImportRows] = useState<Row[] | null>(null);
   const types =
     useData("/master-data?kind=PRODUCT_TYPE", c.version, c.setError) || [];
@@ -92,7 +93,8 @@ export default function Medicines(c: any) {
   const list = searched.filter(
     (m: Row) =>
       (!category || m.category === category) &&
-      (!company || m.manufacturer === company),
+      (!company || m.manufacturer === company) &&
+      (!incomplete || m.incompleteFields?.length > 0),
   );
   const field = (key: string, label: string, type = "text") => (
     <Field
@@ -141,6 +143,14 @@ export default function Medicines(c: any) {
                 <option key={v}>{v}</option>
               ))}
           </select>
+          <label>
+            <input
+              type="checkbox"
+              checked={incomplete}
+              onChange={(e) => setIncomplete(e.target.checked)}
+            />
+            Incomplete Product Details
+          </label>
           {isManager && (
             <>
               <Button
@@ -293,6 +303,22 @@ export default function Medicines(c: any) {
                 .catch(() => {});
             }}
           >
+            {edit.incompleteFields?.length > 0 && (
+              <div>
+                <p>
+                  Missing imported details: {edit.incompleteFields.join(", ")}.
+                  Verify prices, dosage form, base unit and packaging before
+                  enabling sales.
+                </p>
+                <Button
+                  type="button"
+                  secondary
+                  onClick={() => setEdit({ ...edit, incompleteFields: [] })}
+                >
+                  I have completed and verified operational details
+                </Button>
+              </div>
+            )}
             <div className="form-grid">
               <MasterSelect
                 c={c}
@@ -372,7 +398,8 @@ export default function Medicines(c: any) {
                 ["boxPrice", "Box price (optional)", "number"],
                 ["mrp", "MRP / base (optional)", "number"],
                 ["minimumStock", "Minimum stock", "number"],
-                ["reorderQuantity", "Reorder quantity", "number"],
+                ["reorderQuantity", "Target stock", "number"],
+                ["reorderLevel", "Reorder level", "number"],
               ]
                 .filter(([k]) =>
                   pharma

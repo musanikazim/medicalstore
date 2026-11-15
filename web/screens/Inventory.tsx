@@ -1,3 +1,4 @@
+import { PrintLink } from "../components/business";
 import { unitsFor } from "../product-utils";
 import {
   ExpiryBadge,
@@ -136,6 +137,15 @@ export default function Inventory(c: any) {
             <RefreshCw size={16} />
             Reconcile
           </Button>
+          <PrintLink
+            path={
+              "/reports/export?format=pdf&kind=inventory&from=" +
+              day() +
+              "&to=" +
+              day()
+            }
+            defaultPaper={c.settings.printFormat}
+          />
           <Button
             secondary
             onClick={() =>

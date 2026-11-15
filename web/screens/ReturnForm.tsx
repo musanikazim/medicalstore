@@ -69,7 +69,14 @@ export default function ReturnForm({ c, type, original, close }: any) {
         onSubmit={(e) => {
           e.preventDefault();
           c.run(() => api("/returns", p), "Return recorded")
-            .then(close)
+            .then((r: Row) => {
+              window.open(
+                "/api/business-documents/return/" + r.id,
+                "_blank",
+                "noopener",
+              );
+              close();
+            })
             .catch(() => {});
         }}
       >

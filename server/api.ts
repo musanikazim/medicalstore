@@ -1,3 +1,11 @@
+import { businessReference, ledgerLabels } from "../shared/business";
+import { statement } from "./statements";
+import {
+  statementDocument,
+  businessDocument,
+  amountText,
+} from "./business-printing";
+import { registerBusinessRoutes } from "./business-routes";
 import { creditReport } from "./credit-reports";
 import { invoiceDocument, collectionDocument } from "./printing";
 import {
@@ -186,6 +194,7 @@ api.use(async (req, res, next) => {
     res.status(401).json({ error: "Sign in to continue" });
   }
 });
+registerBusinessRoutes(route, actor);
 route("get", "/auth/me", async (r) => actor(r));
 route("post", "/auth/logout", async (r, res) => {
   await db.user.update({
@@ -197,25 +206,48 @@ route("post", "/auth/logout", async (r, res) => {
 });
 route("get", "/credit-reports", async (r, res) => {
   const result = await creditReport(actor(r), r.query);
+  result.rows = result.rows.map((row: any) =>
+    Object.fromEntries(
+      Object.entries(row)
+        .filter(([k]) => k !== "enteredBy")
+        .map(([k, v]) => [
+          k,
+          k === "type" && typeof v === "string"
+            ? ledgerLabels[v] || v.replaceAll("_", " ").toLowerCase()
+            : typeof v === "string"
+              ? businessReference(v)
+              : v,
+        ]),
+    ),
+  );
   if (r.query.format === "pdf") {
     res.type("pdf");
-    const pdf = new PDFDocument({ margin: 36 });
+    const settings: any =
+      (await db.settings.findUnique({ where: { id: "store" } }))?.data || {};
+    const d = businessDocument(
+      settings,
+      "CUSTOMER " + result.kind.toUpperCase(),
+      String(r.query.paper || settings.printFormat || "A4"),
+    );
+    d.text(result.from + " to " + result.to + " | " + result.note);
+    const columns = Object.keys(result.rows[0] || {}).filter(
+      (k) =>
+        !["id", "customerId", "saleId", "collectionId", "createdBy"].includes(
+          k,
+        ),
+    );
+    d.table(
+      columns,
+      result.rows.map((row) =>
+        columns.map((k) =>
+          typeof (row as any)[k] === "string"
+            ? businessReference((row as any)[k])
+            : (row as any)[k],
+        ),
+      ),
+    );
+    const pdf = d.finish();
     pdf.pipe(res);
-    pdf
-      .fontSize(16)
-      .text("Sehat · " + result.kind)
-      .fontSize(9)
-      .text(result.from + " to " + result.to)
-      .text(result.note)
-      .moveDown();
-    for (const row of result.rows)
-      pdf
-        .text(
-          Object.entries(row)
-            .map(([k, v]) => k + ": " + v)
-            .join(" | "),
-        )
-        .moveDown();
     pdf.end();
     return;
   }
@@ -372,9 +404,22 @@ route("post", "/suppliers", async (r) => {
       name: z.string().trim().min(1).max(250),
       phone: z.string().max(100).default(""),
       address: z.string().max(500).default(""),
+      contactPerson: z.string().max(250).default(""),
+      email: z.string().max(250).default(""),
+      remarks: z.string().max(1000).default(""),
+      active: z.boolean().default(true),
     })
     .parse(r.body);
   return transaction(async (t) => {
+    const suppliers = await t.supplier.findMany();
+    if (
+      suppliers.some(
+        (s) =>
+          s.name.trim().replace(/\s+/g, " ").toLowerCase() ===
+          data.name.replace(/\s+/g, " ").toLowerCase(),
+      )
+    )
+      throw new Error("Supplier already exists");
     const s = await t.supplier.create({ data });
     await audit(t, actor(r), "SUPPLIER_CREATE", s.id, data);
     return s;
@@ -387,9 +432,23 @@ route("put", "/suppliers/:id", async (r) => {
       name: z.string().trim().min(1).max(250),
       phone: z.string().max(100).default(""),
       address: z.string().max(500).default(""),
+      contactPerson: z.string().max(250).default(""),
+      email: z.string().max(250).default(""),
+      remarks: z.string().max(1000).default(""),
+      active: z.boolean().default(true),
     })
     .parse(r.body);
   return transaction(async (t) => {
+    const suppliers = await t.supplier.findMany();
+    if (
+      suppliers.some(
+        (s) =>
+          s.id !== String(r.params.id) &&
+          s.name.trim().replace(/\s+/g, " ").toLowerCase() ===
+            data.name.replace(/\s+/g, " ").toLowerCase(),
+      )
+    )
+      throw new Error("Supplier already exists");
     const supplier = await t.supplier.update({
       where: { id: String(r.params.id) },
       data,
@@ -664,16 +723,25 @@ route("get", "/reports/export", async (r, res) => {
   res.attachment(`medicalstore-${kind}.${format}`);
   if (format === "pdf") {
     res.type("pdf");
-    const pdf = new PDFDocument({ margin: 35 });
+    const settings: any =
+      (await db.settings.findUnique({ where: { id: "store" } }))?.data || {};
+    const d = businessDocument(
+      settings,
+      kind.toUpperCase(),
+      String(r.query.paper || settings.printFormat || "A4"),
+    );
+    d.text(result.from + " to " + result.to + " | PKR");
+    const columns = Object.keys(rows[0] || {});
+    d.table(
+      columns,
+      rows.map((row) =>
+        columns.map((k) =>
+          typeof row[k] === "string" ? businessReference(row[k]) : row[k],
+        ),
+      ),
+    );
+    const pdf = d.finish();
     pdf.pipe(res);
-    pdf.fontSize(18).text("MedicalStore • " + kind);
-    pdf.fontSize(10).text(result.from + " to " + result.to + " • PKR");
-    for (const row of rows)
-      pdf.moveDown().text(
-        Object.entries(row)
-          .map(([k, v]) => `${k}: ${v}`)
-          .join(" | "),
-      );
     pdf.end();
     return;
   }
@@ -733,7 +801,11 @@ route("get", "/sales/:id/receipt", async (r, res) => {
   const format = z
     .enum(["58", "80", "A4"])
     .parse(
-      r.query.format || settings.printFormat || settings.receiptWidth || "80",
+      r.query.paper ||
+        r.query.format ||
+        settings.printFormat ||
+        settings.receiptWidth ||
+        "80",
     );
   const pdf = invoiceDocument(sale, settings, format);
   pdf.pipe(res);
@@ -746,7 +818,35 @@ route("get", "/collections/:id/receipt", async (r, res) => {
   });
   const settings =
     (await db.settings.findUnique({ where: { id: "store" } }))?.data || {};
-  const pdf = collectionDocument(c, c.customer, settings);
+  const d = businessDocument(
+    settings,
+    "PAYMENT RECEIPT RC-" + c.number,
+    String(r.query.paper || (settings as any).printFormat || "A4"),
+  );
+  d.text(
+    c.customer.name +
+      " | " +
+      c.customer.mobile +
+      "\nDate: " +
+      c.paymentDate +
+      "\nMethod: " +
+      c.method,
+  );
+  d.table(
+    ["Description", "PKR"],
+    [
+      ["Amount received", amountText(c.amount)],
+      ["Advance", amountText(c.advance)],
+      ["Opening allocation", amountText(c.openingAllocation)],
+    ],
+    [0.7, 0.3],
+    [1],
+  );
+  d.text(
+    "Reference: " + businessReference(c.reference) + "\nRemarks: " + c.remarks,
+  );
+  if (c.reversal) d.text("REVERSED: " + c.reversal.reason);
+  const pdf = d.finish();
   res
     .type("pdf")
     .setHeader(
@@ -757,24 +857,34 @@ route("get", "/collections/:id/receipt", async (r, res) => {
   pdf.end();
 });
 route("get", "/customers/:id/statement", async (r, res) => {
-  const d = await customerDetail(actor(r), String(r.params.id));
-  const pdf = new PDFDocument({ margin: 36 });
+  const d = await statement(
+    String(r.params.id),
+    String(r.query.from || ""),
+    String(r.query.to || ""),
+  );
+  if (r.query.format === "json") return d;
+  const settings: any =
+    (await db.settings.findUnique({ where: { id: "store" } }))?.data || {};
+  const pdf = statementDocument(
+    d,
+    settings,
+    String(r.query.paper || settings.statementPrintFormat || "A4"),
+    r.query.mode === "detailed",
+  );
   res.type("pdf");
   pdf.pipe(res);
-  pdf.fontSize(16).text(d.customer.name + " · Customer Statement");
-  pdf
-    .fontSize(10)
-    .text("Outstanding PKR " + d.outstanding + " · Advance PKR " + d.advance)
-    .moveDown();
-  for (const l of d.ledger)
-    pdf
-      .text(
-        `${l.createdAt.toISOString().slice(0, 10)} | ${l.type} | Debit ${l.debit} | Credit ${l.credit} | Balance ${l.balance}`,
-      )
-      .moveDown(0.5);
   pdf.end();
 });
 const settingSchema = z.object({
+  onboardingComplete: z.boolean().optional(),
+  statementPrintFormat: z.enum(["A4", "80", "58"]).default("A4"),
+  reminderCountryCode: z
+    .string()
+    .regex(/^[1-9]\d{0,3}$/)
+    .default("92"),
+  reminderContact: z.string().max(50).default(""),
+  reminderEnglish: z.string().max(3000).default(""),
+  reminderRomanUrdu: z.string().max(3000).default(""),
   taxRate: z.number().min(0).max(100).default(0),
   printFormat: z.enum(["58", "80", "A4"]).default("80"),
   showBatch: z.boolean().default(false),

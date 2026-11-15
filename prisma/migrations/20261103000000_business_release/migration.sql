@@ -1,0 +1,8 @@
+-- Additive release: preserve existing inventory, invoices and balances.
+ALTER TABLE "Medicine" ADD COLUMN "reorderLevel" INTEGER NOT NULL DEFAULT 10 CHECK ("reorderLevel">=0), ADD COLUMN "incompleteFields" JSONB NOT NULL DEFAULT '[]';
+UPDATE "Medicine" SET "reorderLevel"="minimumStock";
+ALTER TABLE "Supplier" ADD COLUMN "contactPerson" TEXT NOT NULL DEFAULT '', ADD COLUMN email TEXT NOT NULL DEFAULT '', ADD COLUMN remarks TEXT NOT NULL DEFAULT '', ADD COLUMN active BOOLEAN NOT NULL DEFAULT true, ADD COLUMN "openingPayable" DECIMAL(18,6) NOT NULL DEFAULT 0 CHECK ("openingPayable">=0);
+CREATE TABLE "ImportJob" (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, filename TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PREVIEW', options JSONB NOT NULL, rows JSONB NOT NULL, result JSONB NOT NULL DEFAULT '{}', "createdBy" TEXT NOT NULL, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE "ImportRow" (id TEXT PRIMARY KEY, "jobId" TEXT NOT NULL REFERENCES "ImportJob"(id), "rowNumber" INTEGER NOT NULL, status TEXT NOT NULL, payload JSONB NOT NULL, result JSONB NOT NULL DEFAULT '{}', UNIQUE("jobId","rowNumber"));
+CREATE TABLE "MappingProfile" (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, mapping JSONB NOT NULL);
+CREATE TABLE "HistoricalInvoice" (id TEXT PRIMARY KEY, kind TEXT NOT NULL, "partyId" TEXT NOT NULL, reference TEXT NOT NULL, date TEXT NOT NULL, total DECIMAL(18,6) NOT NULL, data JSONB NOT NULL, "createdBy" TEXT NOT NULL, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(kind,"partyId",reference));

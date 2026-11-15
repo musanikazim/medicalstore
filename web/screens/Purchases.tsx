@@ -1,3 +1,4 @@
+import { PrintLink } from "../components/business";
 import { unitsFor, unitFactor } from "../product-utils";
 import { ExpiryField, ExpiryWarning, entryBlocked } from "../components/expiry";
 import React, { useState, useEffect, useRef } from "react";
@@ -573,10 +574,10 @@ export default function Purchases(c: any) {
             >
               Download attachment
             </a>
-            <Button secondary onClick={() => window.print()}>
-              <Printer size={16} />
-              Print / PDF
-            </Button>
+            <PrintLink
+              path={"/business-documents/purchase/" + detail.id}
+              defaultPaper={c.settings.printFormat}
+            />
             {detail.status === "DRAFT" && (
               <label className="button secondary">
                 Attach invoice

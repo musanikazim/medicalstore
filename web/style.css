@@ -115,6 +115,31 @@ aside {
   flex-direction: column;
   z-index: 10;
 }
+.app > aside {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+.app > aside > .brand,
+.app > aside > .nav-label,
+.app > aside > .sidebar-bottom {
+  flex-shrink: 0;
+}
+.app > aside > nav {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+.app > aside > nav button {
+  flex-shrink: 0;
+  position: relative;
+}
 .brand {
   display: flex;
   align-items: center;
@@ -1239,7 +1264,8 @@ footer > span:first-child {
   margin-top: 25px;
 }
 .collapsed nav button {
-  padding: 13px 18px;
+  padding: 13px 10px;
+  justify-content: center;
 }
 .collapsed .secure {
   padding: 12px;
@@ -1513,6 +1539,22 @@ pre {
   }
   .detail-grid {
     flex-wrap: wrap;
+  }
+}
+@media (max-height: 600px) {
+  .app > aside {
+    padding-block: 12px;
+  }
+  .app > aside > .nav-label {
+    margin-block: 12px;
+  }
+  .app > aside .sidebar-bottom > button {
+    padding-block: 10px 0;
+  }
+}
+@media (max-height: 480px) {
+  .app > aside .sidebar-bottom .secure {
+    display: none;
   }
 }
 @media print {

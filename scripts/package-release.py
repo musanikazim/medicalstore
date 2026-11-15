@@ -2,6 +2,7 @@
 """Create a source-only ZIP. Never packages this machine's .env or database."""
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -9,14 +10,15 @@ import urllib.parse
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-SKIP_DIRS = {'.git', 'node_modules', 'dist', 'backups', 'test-results', 'playwright-report', '__pycache__', '.cache', '.npm', 'coverage', '.vite', 'attachments', 'secrets', 'credentials'}
+SKIP_DIRS = {'.git', 'node_modules', 'dist', 'backups', 'test-results', 'playwright-report', '__pycache__', '.cache', '.npm', 'coverage', '.vite', 'attachments', 'secrets', 'credentials', 'releases'}
 SKIP_SUFFIXES = {'.zip', '.dump', '.partial', '.log', '.pyc', '.pem', '.key', '.pfx', '.sqlite', '.sqlite3', '.db', '.backup', '.bak', '.p12', '.jks'}
 
 def allowed(path):
     relative = path.relative_to(ROOT)
     return (not any(part in SKIP_DIRS for part in relative.parts)
             and not (path.name.startswith('.env') and path.name != '.env.example')
-            and path.name not in {'.npmrc', '.netrc', '.pgpass'}
+            and path.name not in {'.npmrc', '.netrc', '.pgpass', 'PACKAGE-MANIFEST.sha256'}
+            and not path.name.endswith('.inspect.ndjson')
             and not path.name.endswith(('.sql.gz', '.sql.bz2'))
             and (path.suffix.lower() != '.sql' or relative.parts[:2] == ('prisma', 'migrations'))
             and path.suffix.lower() not in SKIP_SUFFIXES)
@@ -37,14 +39,16 @@ def secrets():
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('--output',required=True,help='Destination outside the checkout')
+    parser.add_argument('--output',required=True,help='Destination outside the checkout or inside releases/')
     parser.add_argument('--stage-only',action='store_true')
     args=parser.parse_args()
     out=Path(args.output).resolve()
-    if out==ROOT or ROOT in out.parents: raise SystemExit('Use an output directory outside the source checkout')
+    release_root=(ROOT/'releases').resolve()
+    if out==ROOT or (ROOT in out.parents and out!=release_root and release_root not in out.parents): raise SystemExit('Use releases/ or an output directory outside the checkout')
     out.mkdir(parents=True,exist_ok=True)
     stage=out/'Sehat-MedicalStore'
-    if stage.exists(): shutil.rmtree(stage)
+    if stage.parent.resolve()!=out or stage.is_symlink(): raise SystemExit('Unsafe staging target')
+    if stage.exists(): raise SystemExit('Staging directory exists; choose a new output folder to preserve earlier releases')
     stage.mkdir()
     private=secrets()
     files=[]
@@ -63,13 +67,14 @@ def main():
             if source.suffix.lower()=='.sh': data=data.replace(b'\r\n',b'\n')
             target.write_bytes(data)
             files.append(relative.as_posix())
-    mandatory=['package.json','package-lock.json','Dockerfile','compose.yaml','.env.example','WINDOWS-INSTALL.md','Setup-Windows.cmd','Start-Sehat.cmd','Stop-Sehat.cmd','Backup-Database.cmd','Initialize-Database.cmd','Create-Administrator.cmd','server/main.ts','web/main.tsx','prisma/schema.prisma','scripts/windows/Common.ps1']
+    mandatory=['package.json','package-lock.json','Dockerfile','compose.yaml','.env.example','WINDOWS-INSTALL.md','Setup-Windows.cmd','Update-Sehat.cmd','Reset-Development-Installation.cmd','Start-Sehat.cmd','Stop-Sehat.cmd','Backup-Database.cmd','Initialize-Database.cmd','Create-Administrator.cmd','server/main.ts','web/main.tsx','prisma/schema.prisma','scripts/windows/Common.ps1','docs/RELEASE-1.1.0.md','docs/DATA-IMPORT.md','docs/import-templates/Sehat-Import-Templates.xlsx']
     if any(not(stage/f).is_file() for f in mandatory): raise SystemExit('Required release file missing')
     manifest=''.join(hashlib.sha256((stage/f).read_bytes()).hexdigest()+'  '+f+'\n' for f in sorted(files))
     (stage/'PACKAGE-MANIFEST.sha256').write_text(manifest,encoding='utf-8')
     if args.stage_only:
         print('Staged source-only release: '+str(stage));return
-    archive=out/'Sehat-MedicalStore-Complete.zip'
+    version=json.loads((ROOT/'package.json').read_text(encoding='utf-8'))['version']
+    archive=out/f'Sehat-MedicalStore-{version}-Complete.zip'
     with zipfile.ZipFile(archive,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=9) as z:
         for f in sorted(stage.rglob('*')):
             if f.is_file(): z.write(f,'Sehat-MedicalStore/'+f.relative_to(stage).as_posix())
@@ -83,7 +88,7 @@ def main():
             expected,name=line.split('  ',1)
             if hashlib.sha256(z.read('Sehat-MedicalStore/'+name)).hexdigest()!=expected: raise SystemExit('Manifest mismatch')
     checksum=hashlib.sha256(archive.read_bytes()).hexdigest()
-    (out/'Sehat-MedicalStore-Complete.zip.sha256').write_text(checksum+'  '+archive.name+'\n')
+    (out/(archive.name+'.sha256')).write_text(checksum+'  '+archive.name+'\n')
     print('Verified '+str(len(files)+1)+' archive files; no current credentials or database included.')
     print('ZIP: '+str(archive))
     print('Bytes: '+str(archive.stat().st_size))

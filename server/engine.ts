@@ -97,6 +97,8 @@ export const medicineSchema = z.object({
   mrp: amount.nullable().default(null),
   minimumStock: z.number().int().nonnegative().default(10),
   reorderQuantity: integer.default(100),
+  reorderLevel: z.number().int().nonnegative().default(10),
+  incompleteFields: z.array(z.string()).default([]),
   active: z.boolean().default(true),
   ...productFields,
 });
@@ -263,6 +265,14 @@ export async function savePurchase(a: Actor, input: unknown, id?: string) {
         where: { id: l.medicineId },
       });
       if (!m.active) throw new Error("Medicine inactive");
+      if (
+        Array.isArray(m.incompleteFields) &&
+        m.incompleteFields.includes("purchasePrice") &&
+        D(l.unitCost).isZero()
+      )
+        throw new Error(
+          "Actual purchase cost is missing. Enter the invoice cost or verify the product's zero-cost default in Medicine Management.",
+        );
       const conversion = await resolveUnit(t, m, l.unit, l.quantity);
       const f = conversion.factor;
       const identity = stockIdentity(m, l.batchNumber, l.expiry);
@@ -304,6 +314,7 @@ export async function postPurchase(
   id: string,
   key: string,
   overrides: unknown = [],
+  importGuard = false,
 ) {
   requireRole(a, managers);
   z.string().uuid().parse(key);
@@ -327,6 +338,7 @@ export async function postPurchase(
         id,
         actor: a.id,
         ...(acknowledged.length ? { acknowledged } : {}),
+        ...(importGuard ? { importGuard } : {}),
       },
       async () => {
         const p = await t.purchase.findUniqueOrThrow({
@@ -336,6 +348,22 @@ export async function postPurchase(
         if (p.status !== "DRAFT") throw new Error("Purchase already posted");
         const expiryOverrides = [];
         for (const line of p.lines) {
+          if (
+            importGuard &&
+            (await t.movement.findFirst({
+              where: {
+                type: "OPENING",
+                batch: {
+                  medicineId: line.medicineId,
+                  number: line.batchNumber,
+                  expiry: line.expiry,
+                },
+              },
+            }))
+          )
+            throw new Error(
+              "This product/batch already has opening stock. Import historical records only to avoid double-counting.",
+            );
           const confirmed = acknowledged.some(
             (o) =>
               o.lineId === line.id &&
@@ -719,6 +747,7 @@ export async function completeSale(a: Actor, input: unknown) {
   );
 }
 const openingSchema = z.object({
+  importGuard: z.boolean().optional(),
   key: z.string().uuid(),
   medicineId: text,
   batchNumber: z.string().max(250).default(""),
@@ -745,6 +774,14 @@ export async function opening(a: Actor, input: unknown) {
         where: { id: p.medicineId },
       });
       if (
+        Array.isArray(m.incompleteFields) &&
+        m.incompleteFields.includes("purchasePrice") &&
+        D(p.unitCost).isZero()
+      )
+        throw new Error(
+          "Actual opening-stock cost is missing. Enter the stock cost or verify the product's zero-cost default in Medicine Management.",
+        );
+      if (
         await t.movement.findFirst({
           where: {
             type: "OPENING",
@@ -761,6 +798,19 @@ export async function opening(a: Actor, input: unknown) {
           "Duplicate opening stock reference for this medicine and batch",
         );
       const identity = stockIdentity(m, p.batchNumber, p.expiry);
+      if (
+        p.importGuard &&
+        (await t.batch.findFirst({
+          where: {
+            medicineId: m.id,
+            number: identity.batchNumber,
+            expiry: identity.expiry,
+          },
+        }))
+      )
+        throw new Error(
+          "Stock already exists for this product/batch. Review it in Inventory instead of importing it again.",
+        );
       p.batchNumber = identity.batchNumber;
       p.expiry = identity.expiry;
       const conversion = await resolveUnit(t, m, p.unit, p.quantity);

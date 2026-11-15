@@ -50,7 +50,9 @@ export function invoiceDocument(sale: any, settings: any, format: string) {
   pdf
     .font("Helvetica-Bold")
     .fontSize(a4 ? 18 : 12)
-    .text(settings.storeName || "Sehat Medical Store", { align: "center" });
+    .text(settings.storeName || "Store name not configured", {
+      align: "center",
+    });
   pdf
     .font("Helvetica")
     .fontSize(small)
@@ -246,7 +248,7 @@ export function collectionDocument(c: any, customer: any, settings: any) {
   pdf
     .font("Helvetica-Bold")
     .fontSize(18)
-    .text(settings.storeName || "Sehat Medical Store");
+    .text(settings.storeName || "Store name not configured");
   pdf
     .font("Helvetica")
     .fontSize(10)

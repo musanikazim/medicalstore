@@ -63,6 +63,20 @@ export async function validateCart(
         message: m.name + ": " + message,
         ...extra,
       });
+    if (
+      Array.isArray(m.incompleteFields) &&
+      m.incompleteFields.some(
+        (k: string) =>
+          ["salePrice", "form", "baseUnit"].includes(k) ||
+          (["unitsPerStrip", "stripsPerBox"].includes(k) &&
+            line.unit !== "base"),
+      )
+    )
+      issue(
+        "INCOMPLETE",
+        "Complete imported product details before selling: " +
+          m.incompleteFields.join(", "),
+      );
     if (!m.active) issue("INACTIVE", "product is inactive");
     if (m.prescription && !prescriptionReference.trim())
       issue("PRESCRIPTION", "Prescription reference required");

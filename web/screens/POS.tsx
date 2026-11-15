@@ -1,3 +1,4 @@
+import { PrintLink } from "../components/business";
 import { unitsFor, unitPrice, unitFactor } from "../product-utils";
 import { CustomerForm, PaymentFields } from "./Customers";
 import { ExpiryBadge } from "../components/expiry";
@@ -1080,6 +1081,10 @@ export default function POS(c: any) {
             />
           )}
           <div className="modal-actions">
+            <PrintLink
+              path={"/sales/" + receipt.id + "/receipt"}
+              defaultPaper={c.settings.printFormat || c.settings.receiptWidth}
+            />
             <a
               className="button"
               href={"/api/sales/" + receipt.id + "/receipt"}
