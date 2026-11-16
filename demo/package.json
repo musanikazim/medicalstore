@@ -1,0 +1,9 @@
+{
+  "name": "sehat-browser-demo",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": { "build": "vite build", "dev": "vite", "preview": "vite preview" },
+  "dependencies": { "react": "19.3.1", "react-dom": "19.3.1", "lucide-react": "0.468.0" },
+  "devDependencies": { "vite": "7.3.7" }
+}
